@@ -42,9 +42,17 @@ format kept, unless you ask for a smaller AV1 copy as well.
 
 ### Flatpak (recommended)
 
+Download `DiscShelf-<version>.flatpak` from the
+[latest release](https://github.com/j-a-b-r-o-n-i/DiscShelf/releases/latest) and open it:
+GNOME Software and KDE Discover install it with a click. Or from a terminal:
+
 ```bash
-flatpak install flathub io.github.j_a_b_r_o_n_i.DiscShelf
+flatpak install --user DiscShelf-0.1.0.flatpak
 ```
+
+It needs [Flathub](https://flathub.org/setup) set up for the runtime it uses, which most
+distributions already have. Disc Shelf isn't on Flathub itself yet, so it doesn't update on
+its own: install the next release's file over it.
 
 Then open **Disc Shelf**. The first-run setup checks the computer and fixes what it can:
 
