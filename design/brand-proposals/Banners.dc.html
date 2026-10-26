@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Disc Shelf banners</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1600px; height: 1720px; box-sizing: border-box; padding: 56px 160px; background: #0B0C0E; color: #E9EBED; font-family: 'IBM Plex Sans', system-ui, sans-serif; display: flex; flex-direction: column; gap: 22px">
+
+  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #A2A9B0">GITHUB SOCIAL PREVIEW · 1280 × 640</span>
+  <div style="width: 1280px; height: 640px; box-sizing: border-box; padding: 72px 80px; border-radius: 18px; background: #111315; border: 1px solid #2E3338; display: flex; align-items: center; gap: 64px; overflow: hidden">
+    <div style="flex: 1 1 auto; display: flex; flex-direction: column; gap: 28px">
+      <dc-import name="Icon" variant="{{concept}}" size="{{ 168 }}" hint-size="168px,168px"></dc-import>
+      <span style="font-size: 88px; font-weight: 700; letter-spacing: -1.5px; line-height: 1">Disc Shelf</span>
+      <span style="font-size: 30px; color: #C3C8CD; line-height: 1.3">Rip your discs, name the episodes,<br>and put them straight into Plex.</span>
+    </div>
+    <div style="flex: 0 0 420px; display: flex; flex-direction: column; gap: 12px">
+      <sc-for list="{{rows}}" as="r" hint-placeholder-count="5">
+        <div style="display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: 12px; background: #1A1D20; border: 1px solid {{r.border}}">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 17px; color: #A2A9B0">{{r.code}}</span>
+          <span style="flex: 1 1 auto; font-size: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.name}}</span>
+          <span style="font-size: 14px; font-weight: 600; padding: 3px 10px; border-radius: 999px; {{r.tag}}">{{r.state}}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #A2A9B0; margin-top: 18px">README HEADER · 1280 × 320</span>
+  <div style="width: 1280px; height: 320px; box-sizing: border-box; padding: 56px 72px; border-radius: 18px; background: #F4F4F2; color: #1A1D20; display: flex; align-items: center; gap: 44px">
+    <dc-import name="Icon" variant="{{concept}}" size="{{ 176 }}" hint-size="176px,176px"></dc-import>
+    <div style="flex: 1 1 auto; display: flex; flex-direction: column; gap: 14px">
+      <span style="font-size: 64px; font-weight: 700; letter-spacing: -1px; line-height: 1">Disc Shelf</span>
+      <span style="font-size: 24px; color: #4A5056">Blu-ray, 4K and DVD backups for Plex, with the episodes already named.</span>
+      <div style="display: flex; flex-wrap: wrap; gap: 10px">
+        <span style="font-size: 15px; font-weight: 600; padding: 6px 14px; border-radius: 999px; background: #FBE3B8; color: #3A2A12">Episodes matched for you</span>
+        <span style="font-size: 15px; font-weight: 600; padding: 6px 14px; border-radius: 999px; background: #DCEAF6; color: #12324F">Copied and checked</span>
+        <span style="font-size: 15px; font-weight: 600; padding: 6px 14px; border-radius: 999px; background: #D7EFE2; color: #0E3B24">HDR kept as on the disc</span>
+      </div>
+    </div>
+  </div>
+
+  <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #A2A9B0; margin-top: 18px">FLATHUB APP PAGE HEADER · LIGHT AND DARK BRAND COLOURS</span>
+  <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; width: 1280px">
+    <div style="height: 300px; box-sizing: border-box; padding: 40px; border-radius: 18px; background: #FBE3B8; color: #2A1D0A; display: flex; flex-direction: column; justify-content: space-between">
+      <div style="display: flex; align-items: center; gap: 24px">
+        <dc-import name="Icon" variant="{{concept}}" size="{{ 128 }}" hint-size="128px,128px"></dc-import>
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <span style="font-size: 34px; font-weight: 700">Disc Shelf</span>
+          <span style="font-size: 17px; color: #5A4524">Back up discs into Plex, episodes named</span>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 14px">
+        <span style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 22px; border-radius: 10px; background: #2A1D0A; color: #FBE3B8; font-weight: 600; font-size: 16px">Install</span>
+        <span style="font-size: 14px; color: #5A4524">GPL-3.0 · Linux</span>
+      </div>
+    </div>
+    <div style="height: 300px; box-sizing: border-box; padding: 40px; border-radius: 18px; background: #3A2A12; color: #FBE3B8; display: flex; flex-direction: column; justify-content: space-between">
+      <div style="display: flex; align-items: center; gap: 24px">
+        <dc-import name="Icon" variant="{{concept}}" size="{{ 128 }}" hint-size="128px,128px"></dc-import>
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <span style="font-size: 34px; font-weight: 700">Disc Shelf</span>
+          <span style="font-size: 17px; color: #E5C996">Back up discs into Plex, episodes named</span>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 14px">
+        <span style="display: inline-flex; align-items: center; min-height: 44px; padding: 0 22px; border-radius: 10px; background: #F0A23B; color: #1A1206; font-weight: 600; font-size: 16px">Install</span>
+        <span style="font-size: 14px; color: #E5C996">GPL-3.0 · Linux</span>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"concept":{"editor":"enum","default":"tile","options":["shelf","sleeve","list","tile"]},"$preview":{"width":1600,"height":1720}}'>
+class Component extends DCLogic {
+renderVals() {
+const good = 'background: #1F2A22; color: #8FE0B0';
+const check = 'background: #2B2416; color: #F5C27A';
+const ripping = 'background: #15202B; color: #A9D1F6';
+return {
+concept: this.props.concept ?? 'tile',
+rows: [
+  { code: 'S02E01', name: 'It Came from the Nightosphere', state: 'In Plex', tag: good, border: '#2E3338' },
+  { code: 'S01E23', name: 'Rainy Day Daydream', state: 'In Plex', tag: good, border: '#2E3338' },
+  { code: 'S01E11', name: 'Finn the Wizard', state: 'Check', tag: check, border: '#8A6A33' },
+  { code: 'S02E07', name: 'Power Animal', state: 'Copying', tag: ripping, border: '#2E3338' },
+  { code: 'S01E05', name: 'The Enchiridion!', state: 'Ripping', tag: ripping, border: '#2E3338' }
+]
+};
+}
+}
+</script>
+</body>
+</html>

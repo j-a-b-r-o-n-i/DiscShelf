@@ -1,0 +1,18 @@
+{
+  "v": 3,
+  "createdOnFiles": {"v": 1, "at": "2026-10-26T17:40:00Z"},
+  "title": "Disc Shelf brand proposals",
+  "launch": {"view": "canvas"},
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {"x": 0, "y": 0, "w": 1600, "h": 980, "title": "Icon concepts"},
+    "Palette.dc.html": {"x": 1680, "y": 0, "w": 900, "h": 980, "title": "Colours and type"},
+    "Banners.dc.html": {"x": 0, "y": 1100, "w": 1600, "h": 1720, "title": "Banners: GitHub, README, Flathub"},
+    "Icon.dc.html": {"x": 1680, "y": 1100, "w": 256, "h": 256, "title": "Icon component"}
+  },
+  "order": ["Main.dc.html", "Palette.dc.html", "Banners.dc.html", "Icon.dc.html"],
+  "notes": {
+    "title": {"x": 0, "y": -300, "text": "Disc Shelf: icon and banner proposals", "kind": "title1", "maxW": 2580}
+  },
+  "designSystems": []
+}

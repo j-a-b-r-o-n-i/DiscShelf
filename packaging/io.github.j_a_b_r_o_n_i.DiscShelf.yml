@@ -1,0 +1,281 @@
+# Flatpak manifest for Disc Shelf.
+#
+# The app id is set here, in `id:` below, and nowhere else: the desktop file, metainfo and
+# icon are templates that get the id from $FLATPAK_ID at build time, the Python code reads
+# FLATPAK_ID at run time, and the CI workflow finds this file by its pattern. To rename the
+# app, change `id:` and rename this file to match (Flathub wants <app id>.yml).
+#
+# Build locally (from the repo root):
+#   flatpak run org.flatpak.Builder --user --install --force-clean \
+#       .flatpak-build/build-dir packaging/io.github.j_a_b_r_o_n_i.DiscShelf.yml
+#
+# Runtime: KDE 6.11 with the PySide BaseApp, as Flathub asks of PySide apps (its pip
+# generator refuses PySide6 wheels). The KDE SDK also has the Qt 6 headers mkvtoolnix
+# needs: its command-line tools use QtCore, so it could not be built on the plain
+# freedesktop runtime without building Qt as well.
+id: io.github.j_a_b_r_o_n_i.DiscShelf
+runtime: org.kde.Platform
+runtime-version: '6.11'
+sdk: org.kde.Sdk
+base: io.qt.PySide.BaseApp
+base-version: '6.11'
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: disc-shelf
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # TVmaze, TheDiscDB, Plex and the NAS.
+  - --share=network
+  # The optical drive (/dev/sr*, /dev/sg*), and /dev/nvidia* for the AV1 encoder.
+  # --device=dri is not enough for either.
+  - --device=all
+  # Rips go to ~/rips by default, and the NAS shares are mounted under /mnt, /media or
+  # /run/media; the user picks both folders in the settings.
+  - --filesystem=home
+  - --filesystem=/mnt
+  - --filesystem=/media
+  - --filesystem=/run/media
+  # MakeMKV can't be bundled: its licence doesn't allow redistribution. Disc Shelf runs the
+  # user's own copy (the com.makemkv.MakeMKV Flatpak, or a makemkvcon installed on the
+  # host) with `flatpak-spawn --host`, which needs this name. The first-run setup also uses
+  # it to install MakeMKV from Flathub when the user asks, and to load the sg kernel
+  # module through pkexec on the host (MakeMKV can't see the drive without it, and Arch
+  # doesn't load it on its own). discshelf/system.py has every host command.
+  - --talk-name=org.freedesktop.Flatpak
+  # Desktop notifications.
+  - --talk-name=org.freedesktop.Notifications
+  - --filesystem=xdg-config/kdeglobals:ro
+  # Tesseract otherwise looks for its language data in the current folder.
+  - --env=TESSDATA_PREFIX=/app/share/tessdata
+
+build-options:
+  env:
+    # The BaseApp's WebEngine and its libraries aren't used; this drops about 600 MB.
+    BASEAPP_REMOVE_WEBENGINE: '1'
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /lib/cmake
+  - /share/man
+  - /share/doc
+  - /share/aclocal
+  - '*.a'
+  - '*.la'
+
+cleanup-commands:
+  - /app/cleanup-BaseApp.sh
+
+modules:
+  # ---------------------------------------------------------------- RapidOCR
+  # Wheels for RapidOCR's dependencies, from python3-ocr-requirements.txt:
+  #   flatpak-pip-generator --runtime org.kde.Sdk//6.11 --wheel-arches x86_64,aarch64 \
+  #     --prefer-wheels onnxruntime,opencv-python-headless,shapely,pyclipper,pillow,pyyaml,protobuf,numpy \
+  #     --cleanup scripts -r packaging/python3-ocr-requirements.txt -o packaging/python3-ocr-deps
+  # onnxruntime has no source release on PyPI, and opencv takes hours to build, so these
+  # are the manylinux wheels. numpy comes from the BaseApp.
+  - python3-ocr-deps.json
+
+  # rapidocr_onnxruntime 1.2.3 asks for opencv-python, the build with Qt and X11 inside it;
+  # opencv-python-headless above provides the same cv2 module, so this skips the check.
+  # The three ONNX models (detection, angle, recognition; 14 MB) are inside this wheel,
+  # under rapidocr_onnxruntime/models/, so nothing is downloaded on first use.
+  - name: python3-rapidocr-onnxruntime
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-deps --no-index --no-build-isolation --prefix=${FLATPAK_DEST} rapidocr_onnxruntime-1.2.3-py3-none-any.whl
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/b7/ef/0df9a58310895ab357f85df67935af6a8fb98f0965c7476cee6fcb966a7e/rapidocr_onnxruntime-1.2.3-py3-none-any.whl
+        sha256: c707d3a6eb72d13119afe9602d3cc36d8b2a4a4d74e9575cf1b0e67ed6a27819
+
+  # ---------------------------------------------------------------- ffmpeg
+  # The runtime's own ffmpeg can't decode H.264, HEVC or VC-1 (every Blu-ray) and has no
+  # libvmaf, and Flathub's ffmpeg-full extension stopped at 24.08, so ffmpeg is built here:
+  # SVT-AV1 and dav1d from the SDK, libvmaf below, and NVENC/NVDEC through the
+  # nv-codec-headers in the SDK (the NVIDIA driver's libraries come from the
+  # org.freedesktop.Platform.GL.nvidia extension at run time).
+  - name: libvmaf
+    buildsystem: meson
+    subdir: libvmaf
+    config-opts:
+      - -Denable_tests=false
+      - -Denable_docs=false
+      - -Dbuilt_in_models=true
+    sources:
+      - type: archive
+        url: https://github.com/Netflix/vmaf/archive/refs/tags/v3.2.1.tar.gz
+        sha256: 5df7386911bc15fd1ca783132528748d219768ae4fc5f8e0b61184f041648092
+    modules:
+      # libvmaf embeds its models with xxd, which the SDK doesn't have.
+      - name: xxd-for-libvmaf
+        buildsystem: simple
+        build-commands:
+          - install -Dm755 xxd.py ${FLATPAK_DEST}/bin/xxd
+        sources:
+          - type: file
+            path: build-aux/xxd.py
+        cleanup:
+          - '*'
+
+  - name: ffmpeg
+    config-opts:
+      # Static ffmpeg libraries keep them apart from the runtime's older libavcodec.
+      - --disable-shared
+      - --enable-static
+      - --disable-doc
+      - --disable-ffplay
+      - --enable-libdav1d
+      - --enable-libsvtav1
+      - --enable-libvmaf
+      - --enable-ffnvcodec
+      - --enable-nvenc
+      - --enable-nvdec
+      - --enable-cuvid
+    cleanup:
+      - /share/ffmpeg
+    sources:
+      - type: archive
+        url: https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+        sha256: 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
+
+  # ---------------------------------------------------------------- mkvtoolnix
+  # Only the command-line tools; Qt comes from the KDE SDK. libebml, libmatroska, pugixml
+  # and fmt are bundled in its source. Based on Flathub's org.bunkus.mkvtoolnix-gui.
+  - name: boost
+    buildsystem: simple
+    build-commands:
+      - ./bootstrap.sh --prefix=${FLATPAK_DEST} --with-libraries=filesystem,system
+      - ./b2 -j ${FLATPAK_BUILDER_N_JOBS} install
+    cleanup:
+      - /include
+      - /lib/cmake
+    sources:
+      - type: archive
+        url: https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.bz2
+        sha256: 1bed88e40401b2cb7a1f76d4bab499e352fa4d0c5f31c0dbae64e24d34d7513b
+
+  - name: mkvtoolnix
+    buildsystem: simple
+    build-commands:
+      # --with-boost-libdir: the BaseApp has /app/lib/x86_64-linux-gnu, so configure looks
+      # for Boost there instead of in /app/lib.
+      - ./configure --prefix=${FLATPAK_DEST} --with-boost=${FLATPAK_DEST} --with-boost-libdir=${FLATPAK_DEST}/lib --disable-gui
+        --disable-update-check --with-qmake6=/usr/bin/qmake --enable-optimization
+        --with-docbook-xsl-root=/usr/share/xml/docbook/xml/xsl-stylesheets
+      - ./drake -j ${FLATPAK_BUILDER_N_JOBS}
+      - ./drake install
+    sources:
+      - type: archive
+        url: https://mkvtoolnix.download/sources/mkvtoolnix-103.0.tar.xz
+        sha256: d609bc395c409eade05d0a3a5aedd26e09739e232ed03b0f937cf8bd9448c590
+    modules:
+      # mkvtoolnix builds with rake (drake); only needed while building.
+      - name: ruby
+        config-opts:
+          - --disable-install-doc
+        sources:
+          - type: archive
+            url: https://cache.ruby-lang.org/pub/ruby/3.4/ruby-3.4.7.tar.gz
+            sha256: 23815a6d095696f7919090fdc3e2f9459b2c83d57224b2e446ce1f5f7333ef36
+        cleanup:
+          - '*'
+
+  # ---------------------------------------------------------------- tesseract
+  # The fallback text reader when RapidOCR fails, with English data.
+  - name: leptonica
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DBUILD_SHARED_LIBS=ON
+      - -DSW_BUILD=OFF
+      - -DBUILD_PROG=OFF
+    sources:
+      - type: archive
+        url: https://github.com/DanBloomberg/leptonica/releases/download/1.87.0/leptonica-1.87.0.tar.gz
+        sha256: c73363397f96eb1295602bf44d708a994ad42046c791bf03ea0505d829bdb6a7
+
+  - name: tesseract
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DBUILD_SHARED_LIBS=ON
+      - -DBUILD_TRAINING_TOOLS=OFF
+      - -DBUILD_TESTS=OFF
+      - -DGRAPHICS_DISABLED=ON
+      - -DDISABLE_CURL=ON
+      - -DSW_BUILD=OFF
+      # Tesseract's own threads slow down several OCR processes running at once.
+      - -DOPENMP_BUILD=OFF
+    post-install:
+      # post-install runs in the build folder (builddir), one level below the sources.
+      - install -Dm644 ../eng.traineddata ${FLATPAK_DEST}/share/tessdata/eng.traineddata
+    sources:
+      - type: archive
+        url: https://github.com/tesseract-ocr/tesseract/archive/refs/tags/5.5.3.tar.gz
+        sha256: 9218e62793116d42a9f6d14cd9348518b27f382096eea3d0f2d1a24616bb5884
+      # The same English model as Arch's tesseract-data-eng.
+      - type: file
+        url: https://github.com/tesseract-ocr/tessdata/raw/4.1.0/eng.traineddata
+        sha256: daa0c97d651c19fba3b25e81317cd697e9908c8208090c94c3905381c23fc047
+
+  # ---------------------------------------------------------------- rsync
+  # Copies rips to the NAS (discshelf/transfer.py).
+  - name: rsync
+    config-opts:
+      - --with-included-popt
+      - --disable-md2man
+    sources:
+      - type: archive
+        url: https://download.samba.org/pub/rsync/src/rsync-3.5.1.tar.gz
+        sha256: c55f9c9dc10fb8bec397b399a0fdded53cc9a2d8e30891bb0d63724d25c37bef
+
+  # ---------------------------------------------------------------- dovi_tool
+  # Built from source with its crates listed in dovi_tool-cargo-sources.json, made with
+  #   flatpak-cargo-generator.py Cargo.lock -o packaging/dovi_tool-cargo-sources.json
+  # Flathub prefers this to the release binary. internal-font draws plot text without
+  # fontconfig, as upstream's own release builds do; Disc Shelf never plots anyway.
+  - name: dovi_tool
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/dovi_tool/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo --offline build --release --no-default-features --features internal-font
+      - install -Dm755 target/release/dovi_tool ${FLATPAK_DEST}/bin/dovi_tool
+    sources:
+      - type: archive
+        url: https://github.com/quietvoid/dovi_tool/archive/refs/tags/2.3.4.tar.gz
+        sha256: 15b5cb68b3598e51ca968316443c9fb9597b6230e9d692cb4e641d54505a97ec
+      - dovi_tool-cargo-sources.json
+
+  # ---------------------------------------------------------------- Disc Shelf
+  - name: disc-shelf
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-deps --no-index --no-build-isolation --prefix=${FLATPAK_DEST} .
+      - install -Dm644 packaging/disc-shelf.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
+      - sed -e "s/@APP_ID@/${FLATPAK_ID}/g" packaging/disc-shelf.desktop
+        > disc-shelf.desktop.out
+      - install -Dm644 disc-shelf.desktop.out ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+      - sed -e "s/@APP_ID@/${FLATPAK_ID}/g" -e "s/@DEVELOPER_ID@/${FLATPAK_ID%.*}/g" packaging/disc-shelf.metainfo.xml
+        > disc-shelf.metainfo.out
+      - install -Dm644 disc-shelf.metainfo.out ${FLATPAK_DEST}/share/metainfo/${FLATPAK_ID}.metainfo.xml
+    cleanup:
+      - /lib/python*/site-packages/discshelf/test_*.py
+      - /lib/python*/site-packages/discshelf/__pycache__/test_*
+    sources:
+      # For Flathub this becomes a `type: git` source with a tag and commit.
+      - type: dir
+        path: ..
+        skip:
+          - .flatpak-build
+          - .flatpak-builder
+          - .git

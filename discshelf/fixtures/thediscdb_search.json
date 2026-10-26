@@ -1,0 +1,1755 @@
+{
+ "data": {
+  "mediaItems": {
+   "nodes": [
+    {
+     "title": "Office Space",
+     "year": 1999,
+     "type": "Movie",
+     "externalids": {
+      "imdb": "tt0151804",
+      "tmdb": "1542",
+      "tvdb": null
+     },
+     "releases": [
+      {
+       "title": "Office Space",
+       "slug": "1999-dvd",
+       "upc": "086162162756",
+       "year": 1999,
+       "discs": [
+        {
+         "index": 1,
+         "name": "DVD",
+         "format": "DVD",
+         "slug": "dvd",
+         "contentHash": "CD5C90E309F3CF5FCAE286CE50EDCA5D",
+         "titles": [
+          {
+           "index": 0,
+           "sourceFile": "01",
+           "duration": "1:28:51",
+           "size": 4176232448,
+           "segmentMap": "1-3,4-5,6,7-13,14-17,18-20,21-23,24-25,26,27-30,31-33,34-35,36-37,38",
+           "season": "",
+           "episode": "",
+           "itemType": "MainMovie",
+           "item": {
+            "title": "Office Space",
+            "season": null,
+            "episode": null,
+            "type": "MainMovie"
+           }
+          },
+          {
+           "index": 1,
+           "sourceFile": "02",
+           "duration": "0:02:30",
+           "size": 103096320,
+           "segmentMap": "1,2",
+           "season": "",
+           "episode": "",
+           "itemType": "Trailer",
+           "item": {
+            "title": "Original Theatrical Trailer",
+            "season": null,
+            "episode": null,
+            "type": "Trailer"
+           }
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "title": "The Office",
+     "year": 2005,
+     "type": "Series",
+     "externalids": {
+      "imdb": "tt0386676",
+      "tmdb": "2316",
+      "tvdb": null
+     },
+     "releases": [
+      {
+       "title": "2020 Complete Series Blu-ray",
+       "slug": "2020-complete-series-blu-ray",
+       "upc": "191329153567",
+       "year": 2022,
+       "discs": [
+        {
+         "index": 1,
+         "name": "Season One Disc One",
+         "format": "Blu-Ray",
+         "slug": "season-1-disc-1",
+         "contentHash": "C49F79467A3E78DAD21E8899DB138E4A",
+         "titles": []
+        },
+        {
+         "index": 2,
+         "name": "Season Two Disc One",
+         "format": "Blu-Ray",
+         "slug": "season-2-disc-1",
+         "contentHash": "8568696AC85C27678FF2FDA4B5EDC825",
+         "titles": []
+        },
+        {
+         "index": 3,
+         "name": "Season Two Disc Two",
+         "format": "Blu-Ray",
+         "slug": "season-2-disc-2",
+         "contentHash": "1FF273FF5711C8265194BFCFFAFDF03F",
+         "titles": []
+        },
+        {
+         "index": 4,
+         "name": "Season Two Disc Three",
+         "format": "Blu-Ray",
+         "slug": "season-2-disc-3",
+         "contentHash": "0B7DB1AB2763C78B8D91164A266749E4",
+         "titles": []
+        },
+        {
+         "index": 5,
+         "name": "Season Two Disc Four",
+         "format": "Blu-Ray",
+         "slug": "season-2-disc-4",
+         "contentHash": "61CE13EF4629C02736EE461D516945D6",
+         "titles": []
+        },
+        {
+         "index": 6,
+         "name": "Season Three Disc One",
+         "format": "Blu-Ray",
+         "slug": "season-3-disc-1",
+         "contentHash": "F6E664AB3054523678A06ED9F22C5B5C",
+         "titles": []
+        },
+        {
+         "index": 7,
+         "name": "Season Three Disc Two",
+         "format": "Blu-Ray",
+         "slug": "season-3-disc-2",
+         "contentHash": "BFA5B17166A55C3B02C204F8996418D9",
+         "titles": []
+        },
+        {
+         "index": 8,
+         "name": "Season Three Disc Three",
+         "format": "Blu-Ray",
+         "slug": "season-3-disc-3",
+         "contentHash": "01DACCF712AE37C03598E6F2C4E0EF3B",
+         "titles": [
+          {
+           "index": 0,
+           "sourceFile": "00005.mpls",
+           "duration": "0:21:49",
+           "size": 4686133248,
+           "segmentMap": "7",
+           "season": "3",
+           "episode": "16",
+           "itemType": "Episode",
+           "item": {
+            "title": "Business School",
+            "season": "3",
+            "episode": "16",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 1,
+           "sourceFile": "00004.mpls",
+           "duration": "0:21:18",
+           "size": 5221791744,
+           "segmentMap": "6",
+           "season": "3",
+           "episode": "15",
+           "itemType": "Episode",
+           "item": {
+            "title": "Phyllis' Wedding",
+            "season": "3",
+            "episode": "15",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 2,
+           "sourceFile": "00003.mpls",
+           "duration": "0:21:18",
+           "size": 5128384512,
+           "segmentMap": "5",
+           "season": "3",
+           "episode": "14",
+           "itemType": "Episode",
+           "item": {
+            "title": "Ben Franklin",
+            "season": "3",
+            "episode": "14",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 3,
+           "sourceFile": "00002.mpls",
+           "duration": "0:42:44",
+           "size": 8939335680,
+           "segmentMap": "4",
+           "season": "3",
+           "episode": "12-13",
+           "itemType": "Episode",
+           "item": {
+            "title": "Traveling Salesmen/The Return",
+            "season": "3",
+            "episode": "12-13",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 4,
+           "sourceFile": "00000.mpls(1)",
+           "duration": "0:00:23",
+           "size": 43118592,
+           "segmentMap": "1,2",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          },
+          {
+           "index": 5,
+           "sourceFile": "00008.mpls",
+           "duration": "0:26:49",
+           "size": 4710770688,
+           "segmentMap": "10,11",
+           "season": "3",
+           "episode": "12-13",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "Traveling Salesmen/The Return Deleted Scenes",
+            "season": "3",
+            "episode": "12-13",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 6,
+           "sourceFile": "00007.mpls",
+           "duration": "0:29:35",
+           "size": 7141834752,
+           "segmentMap": "9",
+           "season": "3",
+           "episode": "18",
+           "itemType": "Episode",
+           "item": {
+            "title": "The Negotiation",
+            "season": "3",
+            "episode": "18",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 7,
+           "sourceFile": "00006.mpls",
+           "duration": "0:21:18",
+           "size": 5168762880,
+           "segmentMap": "8",
+           "season": "3",
+           "episode": "17",
+           "itemType": "Episode",
+           "item": {
+            "title": "Cocktails",
+            "season": "3",
+            "episode": "17",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 8,
+           "sourceFile": "00015.m2ts",
+           "duration": "0:04:28",
+           "size": 808820736,
+           "segmentMap": "15",
+           "season": "3",
+           "episode": "17",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "Cocktails Deleted Scenes",
+            "season": "3",
+            "episode": "17",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 9,
+           "sourceFile": "00014.m2ts",
+           "duration": "0:05:52",
+           "size": 1070045184,
+           "segmentMap": "14",
+           "season": "3",
+           "episode": "16",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "Business School Deleted Scenes",
+            "season": "3",
+            "episode": "16",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 10,
+           "sourceFile": "00013.m2ts",
+           "duration": "0:10:37",
+           "size": 1975044096,
+           "segmentMap": "13",
+           "season": "3",
+           "episode": "15",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "Phyllis' Wedding Deleted Scenes",
+            "season": "3",
+            "episode": "15",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 11,
+           "sourceFile": "00012.m2ts",
+           "duration": "0:07:38",
+           "size": 1401919488,
+           "segmentMap": "12",
+           "season": "3",
+           "episode": "14",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "Ben Franklin Deleted Scenes",
+            "season": "3",
+            "episode": "14",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 12,
+           "sourceFile": "00003.m2ts",
+           "duration": "0:01:00",
+           "size": 313921536,
+           "segmentMap": "3",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          },
+          {
+           "index": 13,
+           "sourceFile": "00000.m2ts",
+           "duration": "0:00:27",
+           "size": 119961600,
+           "segmentMap": "0",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          }
+         ]
+        },
+        {
+         "index": 9,
+         "name": "Season Three Disc Four",
+         "format": "Blu-Ray",
+         "slug": "season-3-disc-4",
+         "contentHash": "8D6A138F154A0AEC4659DBD63E5E5337",
+         "titles": []
+        },
+        {
+         "index": 10,
+         "name": "Season Four Disc One",
+         "format": "Blu-Ray",
+         "slug": "season-4-disc-1",
+         "contentHash": "5F649D4FEED70FD32A7932A987E26E0C",
+         "titles": []
+        },
+        {
+         "index": 11,
+         "name": "Season Four Disc Two",
+         "format": "Blu-Ray",
+         "slug": "season-4-disc-2",
+         "contentHash": "D03E66306A67B99FDF7D6F46226433CE",
+         "titles": []
+        },
+        {
+         "index": 12,
+         "name": "Season Four Disc Three",
+         "format": "Blu-Ray",
+         "slug": "season-4-disc-3",
+         "contentHash": "84E2D14EC736D9E2BC573351437933F3",
+         "titles": []
+        },
+        {
+         "index": 13,
+         "name": "Season Four Disc Four",
+         "format": "Blu-Ray",
+         "slug": "season-4-disc-4",
+         "contentHash": "2DAC57F5B1003F06E68F84A1C1D376AE",
+         "titles": []
+        },
+        {
+         "index": 14,
+         "name": "Season Five Disc One",
+         "format": "Blu-Ray",
+         "slug": "season-5-disc-1",
+         "contentHash": "1E7D1FC2EF3FD3B9D183FE0CC39D4A56",
+         "titles": []
+        },
+        {
+         "index": 15,
+         "name": "Season Five Disc Two",
+         "format": "Blu-Ray",
+         "slug": "season-5-disc-2",
+         "contentHash": "545670C336D0F96EA8F73698437BB13E",
+         "titles": []
+        },
+        {
+         "index": 16,
+         "name": "Season Five Disc Three",
+         "format": "Blu-Ray",
+         "slug": "season-5-disc-3",
+         "contentHash": "168D65606A87E305C341DA0A9FAD1B65",
+         "titles": []
+        },
+        {
+         "index": 17,
+         "name": "Season Five Disc Four",
+         "format": "Blu-Ray",
+         "slug": "season-5-disc-4",
+         "contentHash": "A937E4C797FB7F02928489E8D30CEE28",
+         "titles": []
+        },
+        {
+         "index": 18,
+         "name": "Season Six Disc One",
+         "format": "Blu-Ray",
+         "slug": "season-6-disc-1",
+         "contentHash": "3D5F736595795B1BE94F9D968FEC8736",
+         "titles": []
+        },
+        {
+         "index": 19,
+         "name": "Season Six Disc Two",
+         "format": "Blu-Ray",
+         "slug": "season-6-disc-2",
+         "contentHash": "B6F8C82BFD4B0CD22D0760AFD5B6FE9C",
+         "titles": []
+        },
+        {
+         "index": 20,
+         "name": "Season Six Disc Three",
+         "format": "Blu-Ray",
+         "slug": "season-6-disc-3",
+         "contentHash": "4AD83A4876A3F01A8805F4B40DDEE50B",
+         "titles": []
+        },
+        {
+         "index": 21,
+         "name": "Season Six Disc Four",
+         "format": "Blu-Ray",
+         "slug": "season-6-disc-4",
+         "contentHash": "8F1A9ECE9B32243E81C17FE1F397C719",
+         "titles": []
+        },
+        {
+         "index": 22,
+         "name": "Season Seven Disc One",
+         "format": "Blu-Ray",
+         "slug": "season-7-disc-1",
+         "contentHash": "E83B10BBCF288D60DDC7A944351F193D",
+         "titles": []
+        },
+        {
+         "index": 23,
+         "name": "Season Seven Disc Two",
+         "format": "Blu-Ray",
+         "slug": "season-7-disc-2",
+         "contentHash": "174505540E700B93C5E3908DFE9505B2",
+         "titles": []
+        },
+        {
+         "index": 24,
+         "name": "Season Seven Disc Three",
+         "format": "Blu-Ray",
+         "slug": "season-7-disc-3",
+         "contentHash": "DA83FF431FA7D9315BAB3279057B5902",
+         "titles": []
+        },
+        {
+         "index": 25,
+         "name": "Season Seven Disc Four",
+         "format": "Blu-Ray",
+         "slug": "season-7-disc-4",
+         "contentHash": "950FF784870FFDA0A21D2296F289DA4C",
+         "titles": []
+        },
+        {
+         "index": 26,
+         "name": "Season Eight Disc One",
+         "format": "Blu-Ray",
+         "slug": "season-8-disc-1",
+         "contentHash": "E2BD292DDF840646EA5EB8A052C1E03B",
+         "titles": []
+        },
+        {
+         "index": 27,
+         "name": "Season Eight Disc Two",
+         "format": "Blu-Ray",
+         "slug": "season-8-disc-2",
+         "contentHash": "8DBEE45D8821764CC1F0954575967388",
+         "titles": []
+        },
+        {
+         "index": 28,
+         "name": "Season Eight Disc Three",
+         "format": "Blu-Ray",
+         "slug": "season-8-disc-3",
+         "contentHash": "CFC391EDD2FE54321D4869E47D2BAFF1",
+         "titles": []
+        },
+        {
+         "index": 29,
+         "name": "Season Eight Disc Four",
+         "format": "Blu-Ray",
+         "slug": "season-8-disc-4",
+         "contentHash": "4ADC6A0049D5136651EFF106B839C993",
+         "titles": []
+        },
+        {
+         "index": 30,
+         "name": "Season Eight Disc Five",
+         "format": "Blu-Ray",
+         "slug": "season-8-disc-5",
+         "contentHash": "9220E45E7F14F4544D36F043F2265830",
+         "titles": []
+        },
+        {
+         "index": 31,
+         "name": "Season Nine Disc One",
+         "format": "Blu-Ray",
+         "slug": "season-9-disc-1",
+         "contentHash": "477BC75FFE77D663D03EF98272DF60BB",
+         "titles": []
+        },
+        {
+         "index": 32,
+         "name": "Season Nine Disc Two",
+         "format": "Blu-Ray",
+         "slug": "season-9-disc-2",
+         "contentHash": "BDAEDCA12F2D37914FE4FC1639D93C86",
+         "titles": []
+        },
+        {
+         "index": 33,
+         "name": "Season Nine Disc Three",
+         "format": "Blu-Ray",
+         "slug": "season-9-disc-3",
+         "contentHash": "768A5392F89BF2CF88B71796A960C2C5",
+         "titles": []
+        },
+        {
+         "index": 34,
+         "name": "Season Nine Disc Four",
+         "format": "Blu-Ray",
+         "slug": "season-9-disc-4",
+         "contentHash": "CE99E5719DDB6D193B9AE56CC80E998E",
+         "titles": []
+        }
+       ]
+      },
+      {
+       "title": "2021 Season 3 Blu-ray",
+       "slug": "2021-season-3-blu-ray",
+       "upc": "191329152621",
+       "year": 2021,
+       "discs": [
+        {
+         "index": 6,
+         "name": "Season Three Disc One",
+         "format": "Blu-Ray",
+         "slug": "season-3-disc-1",
+         "contentHash": "F6E664AB3054523678A06ED9F22C5B5C",
+         "titles": []
+        },
+        {
+         "index": 7,
+         "name": "Season Three Disc Two",
+         "format": "Blu-Ray",
+         "slug": "season-3-disc-2",
+         "contentHash": "BFA5B17166A55C3B02C204F8996418D9",
+         "titles": []
+        },
+        {
+         "index": 8,
+         "name": "Season Three Disc Three",
+         "format": "Blu-Ray",
+         "slug": "season-3-disc-3",
+         "contentHash": "01DACCF712AE37C03598E6F2C4E0EF3B",
+         "titles": [
+          {
+           "index": 0,
+           "sourceFile": "00005.mpls",
+           "duration": "0:21:49",
+           "size": 4686133248,
+           "segmentMap": "7",
+           "season": "3",
+           "episode": "16",
+           "itemType": "Episode",
+           "item": {
+            "title": "Business School",
+            "season": "3",
+            "episode": "16",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 1,
+           "sourceFile": "00004.mpls",
+           "duration": "0:21:18",
+           "size": 5221791744,
+           "segmentMap": "6",
+           "season": "3",
+           "episode": "15",
+           "itemType": "Episode",
+           "item": {
+            "title": "Phyllis' Wedding",
+            "season": "3",
+            "episode": "15",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 2,
+           "sourceFile": "00003.mpls",
+           "duration": "0:21:18",
+           "size": 5128384512,
+           "segmentMap": "5",
+           "season": "3",
+           "episode": "14",
+           "itemType": "Episode",
+           "item": {
+            "title": "Ben Franklin",
+            "season": "3",
+            "episode": "14",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 3,
+           "sourceFile": "00002.mpls",
+           "duration": "0:42:44",
+           "size": 8939335680,
+           "segmentMap": "4",
+           "season": "3",
+           "episode": "12-13",
+           "itemType": "Episode",
+           "item": {
+            "title": "Traveling Salesmen/The Return",
+            "season": "3",
+            "episode": "12-13",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 4,
+           "sourceFile": "00000.mpls(1)",
+           "duration": "0:00:23",
+           "size": 43118592,
+           "segmentMap": "1,2",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          },
+          {
+           "index": 5,
+           "sourceFile": "00008.mpls",
+           "duration": "0:26:49",
+           "size": 4710770688,
+           "segmentMap": "10,11",
+           "season": "3",
+           "episode": "12-13",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "Traveling Salesmen/The Return Deleted Scenes",
+            "season": "3",
+            "episode": "12-13",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 6,
+           "sourceFile": "00007.mpls",
+           "duration": "0:29:35",
+           "size": 7141834752,
+           "segmentMap": "9",
+           "season": "3",
+           "episode": "18",
+           "itemType": "Episode",
+           "item": {
+            "title": "The Negotiation",
+            "season": "3",
+            "episode": "18",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 7,
+           "sourceFile": "00006.mpls",
+           "duration": "0:21:18",
+           "size": 5168762880,
+           "segmentMap": "8",
+           "season": "3",
+           "episode": "17",
+           "itemType": "Episode",
+           "item": {
+            "title": "Cocktails",
+            "season": "3",
+            "episode": "17",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 8,
+           "sourceFile": "00015.m2ts",
+           "duration": "0:04:28",
+           "size": 808820736,
+           "segmentMap": "15",
+           "season": "3",
+           "episode": "17",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "Cocktails Deleted Scenes",
+            "season": "3",
+            "episode": "17",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 9,
+           "sourceFile": "00014.m2ts",
+           "duration": "0:05:52",
+           "size": 1070045184,
+           "segmentMap": "14",
+           "season": "3",
+           "episode": "16",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "Business School Deleted Scenes",
+            "season": "3",
+            "episode": "16",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 10,
+           "sourceFile": "00013.m2ts",
+           "duration": "0:10:37",
+           "size": 1975044096,
+           "segmentMap": "13",
+           "season": "3",
+           "episode": "15",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "Phyllis' Wedding Deleted Scenes",
+            "season": "3",
+            "episode": "15",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 11,
+           "sourceFile": "00012.m2ts",
+           "duration": "0:07:38",
+           "size": 1401919488,
+           "segmentMap": "12",
+           "season": "3",
+           "episode": "14",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "Ben Franklin Deleted Scenes",
+            "season": "3",
+            "episode": "14",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 12,
+           "sourceFile": "00003.m2ts",
+           "duration": "0:01:00",
+           "size": 313921536,
+           "segmentMap": "3",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          },
+          {
+           "index": 13,
+           "sourceFile": "00000.m2ts",
+           "duration": "0:00:27",
+           "size": 119961600,
+           "segmentMap": "0",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          }
+         ]
+        },
+        {
+         "index": 9,
+         "name": "Season Three Disc Four",
+         "format": "Blu-Ray",
+         "slug": "season-3-disc-4",
+         "contentHash": "8D6A138F154A0AEC4659DBD63E5E5337",
+         "titles": []
+        }
+       ]
+      },
+      {
+       "title": "Season Two DVD",
+       "slug": "season-two-dvd",
+       "upc": "025193037824",
+       "year": 2006,
+       "discs": [
+        {
+         "index": 1,
+         "name": "Disc One",
+         "format": "DVD",
+         "slug": "disc-one",
+         "contentHash": "0A83B6C6BF437B4B27E82C895FC0FBDB",
+         "titles": [
+          {
+           "index": 0,
+           "sourceFile": "01",
+           "duration": "0:20:50",
+           "size": 904900608,
+           "segmentMap": "1-4",
+           "season": "2",
+           "episode": "1",
+           "itemType": "Episode",
+           "item": {
+            "title": "The Dundies",
+            "season": "2",
+            "episode": "1",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 1,
+           "sourceFile": "02",
+           "duration": "0:21:31",
+           "size": 936390656,
+           "segmentMap": "1-4",
+           "season": "2",
+           "episode": "2",
+           "itemType": "Episode",
+           "item": {
+            "title": "Sexual Harassment",
+            "season": "2",
+            "episode": "2",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 2,
+           "sourceFile": "03",
+           "duration": "0:42:22",
+           "size": 1841299456,
+           "segmentMap": "1-4,5,6-9",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          },
+          {
+           "index": 3,
+           "sourceFile": "06",
+           "duration": "0:21:28",
+           "size": 898885632,
+           "segmentMap": "1-4",
+           "season": "2",
+           "episode": "3",
+           "itemType": "Episode",
+           "item": {
+            "title": "Office Olympics",
+            "season": "2",
+            "episode": "3",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 4,
+           "sourceFile": "07",
+           "duration": "0:21:26",
+           "size": 932231168,
+           "segmentMap": "1-4",
+           "season": "2",
+           "episode": "4",
+           "itemType": "Episode",
+           "item": {
+            "title": "The Fire",
+            "season": "2",
+            "episode": "4",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 5,
+           "sourceFile": "08",
+           "duration": "0:21:54",
+           "size": 1003548672,
+           "segmentMap": "1-4",
+           "season": "2",
+           "episode": "5",
+           "itemType": "Episode",
+           "item": {
+            "title": "Halloween",
+            "season": "2",
+            "episode": "5",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 6,
+           "sourceFile": "09",
+           "duration": "0:21:53",
+           "size": 1078855680,
+           "segmentMap": "1-4",
+           "season": "2",
+           "episode": "6",
+           "itemType": "Episode",
+           "item": {
+            "title": "The Fight",
+            "season": "2",
+            "episode": "6",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 7,
+           "sourceFile": "10",
+           "duration": "1:26:44",
+           "size": 3913545728,
+           "segmentMap": "1-4,5,6-9,10,11-14,15,16-19",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          },
+          {
+           "index": 8,
+           "sourceFile": "11",
+           "duration": "0:09:35",
+           "size": 382451712,
+           "segmentMap": "1",
+           "season": "2",
+           "episode": "1",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "The Dundies",
+            "season": "2",
+            "episode": "1",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 9,
+           "sourceFile": "12",
+           "duration": "0:03:57",
+           "size": 158105600,
+           "segmentMap": "1",
+           "season": "2",
+           "episode": "2",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "Sexual Harassment",
+            "season": "2",
+            "episode": "2",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 10,
+           "sourceFile": "13",
+           "duration": "0:08:05",
+           "size": 323055616,
+           "segmentMap": "1",
+           "season": "2",
+           "episode": "3",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "Office Olympics",
+            "season": "2",
+            "episode": "3",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 11,
+           "sourceFile": "14",
+           "duration": "0:06:05",
+           "size": 242778112,
+           "segmentMap": "1",
+           "season": "2",
+           "episode": "4",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "The Fire",
+            "season": "2",
+            "episode": "4",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 12,
+           "sourceFile": "15",
+           "duration": "0:08:26",
+           "size": 336781312,
+           "segmentMap": "1",
+           "season": "2",
+           "episode": "5",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "Halloween",
+            "season": "2",
+            "episode": "5",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 13,
+           "sourceFile": "16",
+           "duration": "0:04:47",
+           "size": 190830592,
+           "segmentMap": "1",
+           "season": "2",
+           "episode": "6",
+           "itemType": "DeletedScene",
+           "item": {
+            "title": "The Fight",
+            "season": "2",
+            "episode": "6",
+            "type": "DeletedScene"
+           }
+          },
+          {
+           "index": 14,
+           "sourceFile": "17",
+           "duration": "0:40:55",
+           "size": 1634002944,
+           "segmentMap": "1,2,3,4,5,6",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          },
+          {
+           "index": 15,
+           "sourceFile": "24",
+           "duration": "0:02:20",
+           "size": 92786688,
+           "segmentMap": "1",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          },
+          {
+           "index": 16,
+           "sourceFile": "25",
+           "duration": "0:00:23",
+           "size": 17776640,
+           "segmentMap": "1",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          },
+          {
+           "index": 17,
+           "sourceFile": "26",
+           "duration": "0:00:13",
+           "size": 13604864,
+           "segmentMap": "1",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          },
+          {
+           "index": 18,
+           "sourceFile": "27",
+           "duration": "0:00:13",
+           "size": 12242944,
+           "segmentMap": "1",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          }
+         ]
+        },
+        {
+         "index": 2,
+         "name": "Disc Two",
+         "format": "DVD",
+         "slug": "disc-two",
+         "contentHash": "1D5574E629FDB17E2785F4F0D2DF2058",
+         "titles": []
+        },
+        {
+         "index": 3,
+         "name": "Disc Three",
+         "format": "DVD",
+         "slug": "disc-three",
+         "contentHash": "C3E61B4E4C0E644AC5945F46C412C6BA",
+         "titles": []
+        },
+        {
+         "index": 4,
+         "name": "Disc Four",
+         "format": "DVD",
+         "slug": "disc-four",
+         "contentHash": "BBBD2FDB92F5A7BB8756D2BA7055FCD6",
+         "titles": []
+        }
+       ]
+      },
+      {
+       "title": "The Complete Series - Superfan Extended Episodes",
+       "slug": "2026-the-complete-series-superfan-extended-episodes-blu-ray",
+       "upc": "191329289419",
+       "year": 2026,
+       "discs": [
+        {
+         "index": 1,
+         "name": "Season 1 Disc 1",
+         "format": "Blu-ray",
+         "slug": "season-1-disc-1",
+         "contentHash": "958994827C4C9D63E3381A7FCF70D9F0",
+         "titles": []
+        },
+        {
+         "index": 2,
+         "name": "Season 2 Disc 1",
+         "format": "Blu-ray",
+         "slug": "season-2-disc-1",
+         "contentHash": "AFA092245268EBF51C53D7B32A90FC68",
+         "titles": []
+        },
+        {
+         "index": 3,
+         "name": "Season 2 Disc 2",
+         "format": "Blu-ray",
+         "slug": "season-2-disc-2",
+         "contentHash": "9E4F509783327B79FC367959ABDF4820",
+         "titles": []
+        },
+        {
+         "index": 4,
+         "name": "Season 2 Disc 3",
+         "format": "Blu-ray",
+         "slug": "season-2-disc-3",
+         "contentHash": "DE4AB8D6387813B98FF30B544142EBF9",
+         "titles": []
+        },
+        {
+         "index": 5,
+         "name": "Season 3 Disc 1",
+         "format": "Blu-ray",
+         "slug": "season-3-disc-1",
+         "contentHash": "973F6E682820BF1F5C8882C8A4B95D89",
+         "titles": []
+        },
+        {
+         "index": 6,
+         "name": "Season 3 Disc 2",
+         "format": "Blu-ray",
+         "slug": "season-3-disc-2",
+         "contentHash": "7B284445C7E3422E9A712E7FD6A362AF",
+         "titles": []
+        },
+        {
+         "index": 7,
+         "name": "Season 3 Disc 3",
+         "format": "Blu-ray",
+         "slug": "season-3-disc-3",
+         "contentHash": "0ED5A7FED2BDF8C54D081D9F70EA9489",
+         "titles": [
+          {
+           "index": 0,
+           "sourceFile": "00003.mpls",
+           "duration": "0:02:00",
+           "size": 119224320,
+           "segmentMap": "3,5",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          },
+          {
+           "index": 1,
+           "sourceFile": "00007.mpls",
+           "duration": "0:26:58",
+           "size": 6680107008,
+           "segmentMap": "13",
+           "season": "3",
+           "episode": "14",
+           "itemType": "Episode",
+           "item": {
+            "title": "Ben Franklin",
+            "season": "3",
+            "episode": "14",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 2,
+           "sourceFile": "00008.mpls",
+           "duration": "0:30:03",
+           "size": 7523297280,
+           "segmentMap": "15",
+           "season": "3",
+           "episode": "15",
+           "itemType": "Episode",
+           "item": {
+            "title": "Phyllis' Wedding",
+            "season": "3",
+            "episode": "15",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 3,
+           "sourceFile": "00009.mpls",
+           "duration": "0:29:16",
+           "size": 7249250304,
+           "segmentMap": "17",
+           "season": "3",
+           "episode": "16",
+           "itemType": "Episode",
+           "item": {
+            "title": "Business School",
+            "season": "3",
+            "episode": "16",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 4,
+           "sourceFile": "00010.mpls",
+           "duration": "0:26:00",
+           "size": 6527840256,
+           "segmentMap": "19",
+           "season": "3",
+           "episode": "17",
+           "itemType": "Episode",
+           "item": {
+            "title": "Cocktails",
+            "season": "3",
+            "episode": "17",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 5,
+           "sourceFile": "00011.mpls",
+           "duration": "0:32:24",
+           "size": 8036272128,
+           "segmentMap": "21",
+           "season": "3",
+           "episode": "18",
+           "itemType": "Episode",
+           "item": {
+            "title": "The Negotiation",
+            "season": "3",
+            "episode": "18",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 6,
+           "sourceFile": "00012.mpls",
+           "duration": "0:28:32",
+           "size": 7069028352,
+           "segmentMap": "23",
+           "season": "3",
+           "episode": "19",
+           "itemType": "Episode",
+           "item": {
+            "title": "Safety Training",
+            "season": "3",
+            "episode": "19",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 7,
+           "sourceFile": "00013.mpls",
+           "duration": "0:00:10",
+           "size": 1787904,
+           "segmentMap": "9,11",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          },
+          {
+           "index": 8,
+           "sourceFile": "00001.m2ts",
+           "duration": "0:00:01",
+           "size": 18432,
+           "segmentMap": "1",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          },
+          {
+           "index": 9,
+           "sourceFile": "00005.m2ts",
+           "duration": "0:01:00",
+           "size": 59609088,
+           "segmentMap": "5",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          },
+          {
+           "index": 10,
+           "sourceFile": "00007.m2ts",
+           "duration": "0:00:25",
+           "size": 96399360,
+           "segmentMap": "7",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          }
+         ]
+        },
+        {
+         "index": 8,
+         "name": "Season 3 Disc 4",
+         "format": "Blu-ray",
+         "slug": "season-3-disc-4",
+         "contentHash": "FFC409DF90FEA97049F93E4D2052CD51",
+         "titles": []
+        },
+        {
+         "index": 9,
+         "name": "Season 4 Disc 1",
+         "format": "Blu-ray",
+         "slug": "season-4-disc-1",
+         "contentHash": "08AA0B2A597EF5E9DC587FFB4FF9018E",
+         "titles": []
+        },
+        {
+         "index": 10,
+         "name": "Season 4 Disc 2",
+         "format": "Blu-ray",
+         "slug": "season-4-disc-2",
+         "contentHash": "D83FD20D62198B4C25AB8AAE93C9F119",
+         "titles": []
+        },
+        {
+         "index": 11,
+         "name": "Season 4 Disc 3",
+         "format": "Blu-ray",
+         "slug": "season-4-disc-3",
+         "contentHash": "5E159B3F5D225FECBC234FAE7063B4F2",
+         "titles": []
+        },
+        {
+         "index": 12,
+         "name": "Season 5 Disc 1",
+         "format": "Blu-ray",
+         "slug": "season-5-disc-1",
+         "contentHash": "F5F636B45B64D7E8345D0CCDA6C4C90A",
+         "titles": []
+        },
+        {
+         "index": 13,
+         "name": "Season 5 Disc 2",
+         "format": "Blu-ray",
+         "slug": "season-5-disc-2",
+         "contentHash": "630EA445ABD7BDC9A4E6F72CE5B34EEF",
+         "titles": []
+        },
+        {
+         "index": 14,
+         "name": "Season 5 Disc 3",
+         "format": "Blu-ray",
+         "slug": "season-5-disc-3",
+         "contentHash": "B59B8CA4EE8D15A71D66B50404BA4B89",
+         "titles": []
+        },
+        {
+         "index": 15,
+         "name": "Season 5 Disc 4",
+         "format": "Blu-ray",
+         "slug": "season-5-disc-4",
+         "contentHash": "6DB366C0353B28CC5B523D99DA9C8554",
+         "titles": []
+        },
+        {
+         "index": 16,
+         "name": "Season 6 Disc 1",
+         "format": "Blu-ray",
+         "slug": "season-6-disc-1",
+         "contentHash": "9E61F4649D3D5BA5D3C0A97F7C45DA1F",
+         "titles": []
+        },
+        {
+         "index": 17,
+         "name": "Season 6 Disc 2",
+         "format": "Blu-ray",
+         "slug": "season-6-disc-2",
+         "contentHash": "874770966C5C999172B99324093B7DB3",
+         "titles": []
+        },
+        {
+         "index": 18,
+         "name": "Season 6 Disc 3",
+         "format": "Blu-ray",
+         "slug": "season-6-disc-3",
+         "contentHash": "FB7BB3571105CC8DC19D1B89E790BC04",
+         "titles": []
+        },
+        {
+         "index": 19,
+         "name": "Season 6 Disc 4",
+         "format": "Blu-ray",
+         "slug": "season-6-disc-4",
+         "contentHash": "F5D71493B8009CE77CA4D480DEF68ED6",
+         "titles": []
+        },
+        {
+         "index": 20,
+         "name": "Season 7 Disc 1",
+         "format": "Blu-ray",
+         "slug": "season-7-disc-1",
+         "contentHash": "DCBB55F8B2D0A8B6A3790B8585A70F4A",
+         "titles": []
+        },
+        {
+         "index": 21,
+         "name": "Season 7 Disc 2",
+         "format": "Blu-ray",
+         "slug": "season-7-disc-2",
+         "contentHash": "C33AEB6D7CE0B9D8735DA5C2D770082D",
+         "titles": []
+        },
+        {
+         "index": 22,
+         "name": "Season 7 Disc 3",
+         "format": "Blu-ray",
+         "slug": "season-7-disc-3",
+         "contentHash": "3C3942CFEAE45CF7A2F569BD40A61BF3",
+         "titles": []
+        },
+        {
+         "index": 23,
+         "name": "Season 7 Disc 4",
+         "format": "Blu-ray",
+         "slug": "season-7-disc-4",
+         "contentHash": "B90411968B3EA590455C6356389507A7",
+         "titles": []
+        },
+        {
+         "index": 24,
+         "name": "Season 8 Disc 1",
+         "format": "Blu-ray",
+         "slug": "season-8-disc-1",
+         "contentHash": "EC85A4920167F6EF3D5FD2A503152E1C",
+         "titles": []
+        },
+        {
+         "index": 25,
+         "name": "Season 8 Disc 2",
+         "format": "Blu-ray",
+         "slug": "season-8-disc-2",
+         "contentHash": "1E6488F85F8E10D6FB9F73EC6ECEA532",
+         "titles": []
+        },
+        {
+         "index": 26,
+         "name": "Season 8 Disc 3",
+         "format": "Blu-ray",
+         "slug": "season-8-disc-3",
+         "contentHash": "80BE8A3E443963941CCB25A84D9CD758",
+         "titles": []
+        },
+        {
+         "index": 27,
+         "name": "Season 9 Disc 1",
+         "format": "Blu-ray",
+         "slug": "season-9-disc-1",
+         "contentHash": "5A206CBA932F31A7FFE28C1AE96520D3",
+         "titles": []
+        },
+        {
+         "index": 28,
+         "name": "Season 9 Disc 2",
+         "format": "Blu-ray",
+         "slug": "season-9-disc-2",
+         "contentHash": "3F657860005D410F92659AC1DF505157",
+         "titles": []
+        },
+        {
+         "index": 29,
+         "name": "Season 9 Disc 3",
+         "format": "Blu-ray",
+         "slug": "season-9-disc-3",
+         "contentHash": "B06CF31A33A1DA449FD19E39EBF2CECD",
+         "titles": []
+        },
+        {
+         "index": 30,
+         "name": "Season 9 Disc 4",
+         "format": "Blu-ray",
+         "slug": "season-9-disc-4",
+         "contentHash": "A406BD0651F40E38EB82929711A23D3E",
+         "titles": []
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "title": "Severance",
+     "year": 2022,
+     "type": "Series",
+     "externalids": {
+      "imdb": "tt11280740",
+      "tmdb": "95396",
+      "tvdb": null
+     },
+     "releases": [
+      {
+       "title": "Season 1 Blu-ray",
+       "slug": "2024-season-one-bluray",
+       "upc": "843501043288",
+       "year": 2024,
+       "discs": [
+        {
+         "index": 1,
+         "name": "Disc 1",
+         "format": "Blu-ray",
+         "slug": "season-1-disc-1",
+         "contentHash": "7B464E05D281FDD740BBF7ADC2A62678",
+         "titles": [
+          {
+           "index": 0,
+           "sourceFile": "00002.mpls",
+           "duration": "0:56:41",
+           "size": 14207760384,
+           "segmentMap": "7",
+           "season": "1",
+           "episode": "3",
+           "itemType": "Episode",
+           "item": {
+            "title": "In Perpetuity",
+            "season": "1",
+            "episode": "3",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 1,
+           "sourceFile": "00001.mpls",
+           "duration": "0:53:23",
+           "size": 13388408832,
+           "segmentMap": "3",
+           "season": "1",
+           "episode": "2",
+           "itemType": "Episode",
+           "item": {
+            "title": "Half Loop",
+            "season": "1",
+            "episode": "2",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 2,
+           "sourceFile": "00000.mpls",
+           "duration": "0:57:16",
+           "size": 14363590656,
+           "segmentMap": "0",
+           "season": "1",
+           "episode": "1",
+           "itemType": "Episode",
+           "item": {
+            "title": "Good News About Hell",
+            "season": "1",
+            "episode": "1",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 3,
+           "sourceFile": "00004.m2ts",
+           "duration": "0:01:00",
+           "size": 286439424,
+           "segmentMap": "4",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          }
+         ]
+        },
+        {
+         "index": 2,
+         "name": "Disc 2",
+         "format": "Blu-ray",
+         "slug": "season-1-disc-2",
+         "contentHash": "A50A2A5AEC6AA2E7C221A0C83EBCDEE6",
+         "titles": [
+          {
+           "index": 0,
+           "sourceFile": "00002.mpls",
+           "duration": "0:40:23",
+           "size": 10121367552,
+           "segmentMap": "7",
+           "season": "1",
+           "episode": "6",
+           "itemType": "Episode",
+           "item": {
+            "title": "Hide and Seek",
+            "season": "1",
+            "episode": "6",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 1,
+           "sourceFile": "00001.mpls",
+           "duration": "0:43:40",
+           "size": 10940018688,
+           "segmentMap": "3",
+           "season": "1",
+           "episode": "5",
+           "itemType": "Episode",
+           "item": {
+            "title": "The Grim Barbarity of Optics and Design",
+            "season": "1",
+            "episode": "5",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 2,
+           "sourceFile": "00000.mpls",
+           "duration": "0:46:37",
+           "size": 11662768128,
+           "segmentMap": "0",
+           "season": "1",
+           "episode": "4",
+           "itemType": "Episode",
+           "item": {
+            "title": "The You You Are",
+            "season": "1",
+            "episode": "4",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 3,
+           "sourceFile": "00004.m2ts",
+           "duration": "0:01:00",
+           "size": 286439424,
+           "segmentMap": "4",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          }
+         ]
+        },
+        {
+         "index": 3,
+         "name": "Disc 3",
+         "format": "Blu-ray",
+         "slug": "season-1-disc-3",
+         "contentHash": "D39BE15B45D9F0DD237B951370EBB090",
+         "titles": [
+          {
+           "index": 0,
+           "sourceFile": "00002.mpls",
+           "duration": "0:40:17",
+           "size": 10112053248,
+           "segmentMap": "7",
+           "season": "1",
+           "episode": "9",
+           "itemType": "Episode",
+           "item": {
+            "title": "The We We Are",
+            "season": "1",
+            "episode": "9",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 1,
+           "sourceFile": "00001.mpls",
+           "duration": "0:46:43",
+           "size": 11709634560,
+           "segmentMap": "3",
+           "season": "1",
+           "episode": "8",
+           "itemType": "Episode",
+           "item": {
+            "title": "What's for Dinner?",
+            "season": "1",
+            "episode": "8",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 2,
+           "sourceFile": "00000.mpls",
+           "duration": "0:49:56",
+           "size": 12529078272,
+           "segmentMap": "0",
+           "season": "1",
+           "episode": "7",
+           "itemType": "Episode",
+           "item": {
+            "title": "Defiant Jazz",
+            "season": "1",
+            "episode": "7",
+            "type": "Episode"
+           }
+          },
+          {
+           "index": 3,
+           "sourceFile": "00004.m2ts",
+           "duration": "0:01:00",
+           "size": 286439424,
+           "segmentMap": "4",
+           "season": "",
+           "episode": "",
+           "itemType": "",
+           "item": null
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

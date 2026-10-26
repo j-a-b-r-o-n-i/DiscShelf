@@ -1,0 +1,10 @@
+# What rapidocr_onnxruntime 1.2.3 needs, minus opencv-python (the headless build replaces
+# it) and numpy (the PySide BaseApp has it). Regenerate python3-ocr-deps.json from this
+# with flatpak-pip-generator; see the comment at the python3-ocr-deps module in the manifest.
+onnxruntime
+opencv-python-headless
+shapely
+pyclipper
+six
+pyyaml
+pillow

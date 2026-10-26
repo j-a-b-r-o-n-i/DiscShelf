@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Disc Shelf
+GenericName=Disc Ripper
+Comment=Rip Blu-ray and 4K discs, name the episodes and copy them to your media server
+Exec=disc-shelf
+Icon=@APP_ID@
+Terminal=false
+Categories=AudioVideo;Video;
+Keywords=Blu-ray;BluRay;UHD;4K;DVD;MakeMKV;rip;Plex;episodes;NAS;
+StartupNotify=true

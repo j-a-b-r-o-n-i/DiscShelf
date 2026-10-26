@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "disc-shelf"
+version = "0.1.0"
+description = "Rip Blu-ray and 4K UHD discs with MakeMKV, name the episodes and copy them to a NAS for Plex"
+readme = { text = "Disc Shelf rips Blu-ray and 4K UHD discs with MakeMKV, works out which title is which episode, and copies the files to a NAS folder laid out for Plex.", content-type = "text/plain" }
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "j-a-b-r-o-n-i" }]
+classifiers = [
+    "Environment :: X11 Applications :: Qt",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Video :: Conversion",
+]
+# Only QtCore, QtGui, QtWidgets, QtDBus and QtTest are used, which are all in the
+# Essentials wheel; the full PySide6 package adds about 600 MB of Qt add-ons on top.
+dependencies = ["PySide6-Essentials>=6.5"]
+
+[project.optional-dependencies]
+# RapidOCR reads title cards and case photos (discshelf/ocr.py). 1.2.3 is the version
+# ocr_helper.py is written against. It asks for opencv-python, which drags in Qt and X11
+# libraries; the headless build is the same cv2 without them, so install it first or
+# use the Flatpak, which installs rapidocr with --no-deps.
+ocr = ["rapidocr_onnxruntime==1.2.3", "opencv-python-headless"]
+test = ["pytest"]
+
+[project.scripts]
+disc-shelf = "discshelf.cli:main"
+
+[tool.setuptools]
+packages = ["discshelf"]
+# discshelf/fixtures/ (sample MakeMKV output for the tests) is left out of the wheel;
+# the test_*.py modules go in (setuptools can't drop single modules from a package
+# without a custom build step) and the Flatpak manifest deletes them.
+include-package-data = false
+
+[tool.pytest.ini_options]
+testpaths = ["discshelf"]

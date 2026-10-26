@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Disc Shelf icon</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: {{px}}px; height: {{px}}px; display: flex; align-items: center; justify-content: center">
+  <sc-if value="{{isShelf}}" hint-placeholder-val="{{ true }}">
+    <svg viewBox="0 0 128 128" width="{{px}}" height="{{px}}" role="img" aria-label="Disc Shelf icon: discs on a shelf">
+      <rect x="10" y="100" width="108" height="12" rx="4" fill="#8A5A2B"></rect>
+      <rect x="10" y="100" width="108" height="4" rx="2" fill="#B07A42"></rect>
+      <rect x="20" y="30" width="16" height="70" rx="3" fill="#4F8FCB"></rect>
+      <rect x="24" y="38" width="8" height="3" rx="1.5" fill="#CFE3F5"></rect>
+      <rect x="38" y="24" width="16" height="76" rx="3" fill="#F0A23B"></rect>
+      <rect x="42" y="32" width="8" height="3" rx="1.5" fill="#FFF1D6"></rect>
+      <rect x="56" y="36" width="14" height="64" rx="3" fill="#3E9B6A"></rect>
+      <rect x="59.5" y="44" width="7" height="3" rx="1.5" fill="#D2F2DF"></rect>
+      <circle cx="91" cy="72" r="28" fill="#E6E9EC"></circle>
+      <circle cx="91" cy="72" r="28" fill="none" stroke="#9AA3AC" stroke-width="2"></circle>
+      <path d="M91 48 A24 24 0 0 1 115 72" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" opacity="0.9"></path>
+      <circle cx="91" cy="72" r="10" fill="#C3C8CD"></circle>
+      <circle cx="91" cy="72" r="4" fill="#23272B"></circle>
+    </svg>
+  </sc-if>
+  <sc-if value="{{isSleeve}}" hint-placeholder-val="{{ false }}">
+    <svg viewBox="0 0 128 128" width="{{px}}" height="{{px}}" role="img" aria-label="Disc Shelf icon: a disc sliding out of its case">
+      <circle cx="78" cy="64" r="40" fill="#E6E9EC"></circle>
+      <circle cx="78" cy="64" r="40" fill="none" stroke="#9AA3AC" stroke-width="2"></circle>
+      <path d="M78 30 A34 34 0 0 1 112 64" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" opacity="0.9"></path>
+      <circle cx="78" cy="64" r="15" fill="#F0A23B"></circle>
+      <path d="M74 57 L85 64 L74 71 Z" fill="#1A1206"></path>
+      <rect x="10" y="18" width="64" height="92" rx="8" fill="#23272B"></rect>
+      <rect x="10" y="18" width="64" height="92" rx="8" fill="none" stroke="#3A4046" stroke-width="2"></rect>
+      <rect x="20" y="30" width="44" height="6" rx="3" fill="#F0A23B"></rect>
+      <rect x="20" y="42" width="30" height="4" rx="2" fill="#5A6168"></rect>
+      <rect x="20" y="88" width="44" height="12" rx="3" fill="#2E3338"></rect>
+    </svg>
+  </sc-if>
+  <sc-if value="{{isList}}" hint-placeholder-val="{{ false }}">
+    <svg viewBox="0 0 128 128" width="{{px}}" height="{{px}}" role="img" aria-label="Disc Shelf icon: a disc beside a checked episode list">
+      <rect x="44" y="16" width="72" height="96" rx="10" fill="#F7F3EA"></rect>
+      <rect x="44" y="16" width="72" height="96" rx="10" fill="none" stroke="#C9BFA9" stroke-width="2"></rect>
+      <rect x="64" y="34" width="38" height="6" rx="3" fill="#8C8577"></rect>
+      <rect x="64" y="56" width="38" height="6" rx="3" fill="#8C8577"></rect>
+      <rect x="64" y="78" width="30" height="6" rx="3" fill="#8C8577"></rect>
+      <circle cx="40" cy="78" r="30" fill="#E6E9EC"></circle>
+      <circle cx="40" cy="78" r="30" fill="none" stroke="#9AA3AC" stroke-width="2"></circle>
+      <circle cx="40" cy="78" r="10" fill="#C3C8CD"></circle>
+      <circle cx="40" cy="78" r="4" fill="#23272B"></circle>
+      <circle cx="96" cy="96" r="20" fill="#F0A23B"></circle>
+      <path d="M86 96 L93 103 L106 89" fill="none" stroke="#1A1206" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg>
+  </sc-if>
+  <sc-if value="{{isTile}}" hint-placeholder-val="{{ false }}">
+    <svg viewBox="0 0 128 128" width="{{px}}" height="{{px}}" role="img" aria-label="Disc Shelf icon: a disc resting on a shelf, on an amber tile">
+      <rect x="8" y="8" width="112" height="112" rx="26" fill="#F0A23B"></rect>
+      <circle cx="64" cy="58" r="34" fill="#1A1D20"></circle>
+      <circle cx="64" cy="58" r="34" fill="none" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="2"></circle>
+      <path d="M64 30 A28 28 0 0 1 92 58" fill="none" stroke="#F0A23B" stroke-width="4" stroke-linecap="round" opacity="0.75"></path>
+      <circle cx="64" cy="58" r="9" fill="#F0A23B"></circle>
+      <rect x="22" y="96" width="84" height="10" rx="5" fill="#1A1D20"></rect>
+    </svg>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"variant":{"editor":"enum","default":"shelf","options":["shelf","sleeve","list","tile"]},"size":{"editor":"int","default":256,"min":16,"max":512},"$preview":{"width":256,"height":256}}'>
+class Component extends DCLogic {
+renderVals() {
+const v = this.props.variant ?? 'shelf';
+return {
+  px: this.props.size ?? 256,
+  isShelf: v === 'shelf', isSleeve: v === 'sleeve', isList: v === 'list', isTile: v === 'tile'
+};
+}
+}
+</script>
+</body>
+</html>

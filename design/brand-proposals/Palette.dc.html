@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Disc Shelf colours and type</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 900px; height: 980px; box-sizing: border-box; padding: 56px 56px; background: #111315; color: #E9EBED; font-family: 'IBM Plex Sans', system-ui, sans-serif; display: flex; flex-direction: column; gap: 32px">
+  <div style="display: flex; flex-direction: column; gap: 8px">
+    <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #A2A9B0">DISC SHELF · COLOURS AND TYPE</span>
+    <h1 style="margin: 0; font-size: 36px; font-weight: 700">Taken from the app itself</h1>
+    <span style="font-size: 15px; color: #C3C8CD">The amber accent and dark greys the window already uses, so the icon, banners and app read as one thing.</span>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px">
+    <sc-for list="{{swatches}}" as="s" hint-placeholder-count="8">
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <div style="height: 84px; border-radius: 12px; background: {{s.hex}}; border: 1px solid #2E3338; display: flex; align-items: flex-end; padding: 10px; box-sizing: border-box">
+          <span style="font-size: 13px; font-weight: 600; color: {{s.ink}}">Aa</span>
+        </div>
+        <span style="font-size: 14px; font-weight: 600">{{s.name}}</span>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #A2A9B0">{{s.hex}}</span>
+        <span style="font-size: 13px; color: #C3C8CD">{{s.use}}</span>
+      </div>
+    </sc-for>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 10px; padding: 20px 24px; border-radius: 14px; background: #1A1D20; border: 1px solid #2E3338">
+    <span style="font-size: 14px; font-weight: 600">Flathub brand colours</span>
+    <span style="font-size: 13px; color: #C3C8CD">Flathub paints the app's banner in these, behind the icon: one for light mode, one for dark.</span>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px">
+      <div style="display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 10px; background: #FBE3B8">
+        <dc-import name="Icon" variant="{{concept}}" size="{{ 56 }}" hint-size="56px,56px"></dc-import>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #3A2A12">light · #FBE3B8</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 10px; background: #3A2A12">
+        <dc-import name="Icon" variant="{{concept}}" size="{{ 56 }}" hint-size="56px,56px"></dc-import>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #FBE3B8">dark · #3A2A12</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 12px">
+    <span style="font-size: 44px; font-weight: 700; letter-spacing: -0.5px">Disc Shelf</span>
+    <span style="font-size: 18px; color: #C3C8CD">IBM Plex Sans for words, the same face as the app's interface.</span>
+    <span style="font-family: 'IBM Plex Mono', monospace; font-size: 16px; color: #A2A9B0">S02E01 · 11:44 · 29.0 MB/s · IBM Plex Mono for numbers and codes</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"concept":{"editor":"enum","default":"tile","options":["shelf","sleeve","list","tile"]},"$preview":{"width":900,"height":980}}'>
+class Component extends DCLogic {
+renderVals() {
+return {
+concept: this.props.concept ?? 'tile',
+swatches: [
+  { name: 'Amber', hex: '#F0A23B', ink: '#1A1206', use: 'The accent: buttons, the icon tile, highlights.' },
+  { name: 'Ink on amber', hex: '#1A1206', ink: '#F0A23B', use: 'Text and marks on amber.' },
+  { name: 'Night', hex: '#111315', ink: '#E9EBED', use: 'Dark backgrounds.' },
+  { name: 'Panel', hex: '#1A1D20', ink: '#E9EBED', use: 'Cards on dark.' },
+  { name: 'Paper', hex: '#F4F4F2', ink: '#1A1D20', use: 'Light backgrounds.' },
+  { name: 'Silver', hex: '#E6E9EC', ink: '#1A1D20', use: 'The disc.' },
+  { name: 'Blue', hex: '#4F8FCB', ink: '#0B1A28', use: 'Copying, links.' },
+  { name: 'Green', hex: '#3E9B6A', ink: '#08180F', use: 'Done, in Plex.' }
+]
+};
+}
+}
+</script>
+</body>
+</html>

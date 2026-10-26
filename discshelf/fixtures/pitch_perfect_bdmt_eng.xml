@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<disclib xmlns="urn:BDA:bdmv;disclib">
+  <di:discinfo xmlns:di="urn:BDA:bdmv;discinfo">
+    <di:title>
+      <di:name>Pitch Perfect</di:name>
+      <di:numSets>1</di:numSets>
+      <di:setNumber>1</di:setNumber>
+    </di:title>
+    <di:description>
+      <di:tableOfContents>
+        <di:titleName titleNumber="1">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="2">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="3">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="4">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="5">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="6">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="7">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="8">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="9">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="10">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="11">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="12">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="13">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="14">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="15">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="16">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="17">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="18">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="19">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="20">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="21">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="22">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="23">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="24">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="25">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="26">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="27">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="28">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="29">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="30">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="31">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="32">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="33">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="34">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="35">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="36">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="37">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="38">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="39">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="40">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="41">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="42">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="43">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="44">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="45">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="46">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="47">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="48">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="49">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="50">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="51">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="52">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="53">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="54">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="55">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="56">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="57">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="58">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="59">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="60">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="61">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="62">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="63">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="64">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="65">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="66">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="67">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="68">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="69">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="70">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="71">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="72">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="73">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="74">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="75">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="76">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="77">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="78">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="79">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="80">Pitch Perfect</di:titleName>
+        <di:titleName titleNumber="81">Pitch Perfect</di:titleName>
+      </di:tableOfContents>
+      <di:thumbnail href="PP_BDJ_Jacket_SML.jpg" />
+      <di:thumbnail href="PP_BDJ_Jacket_LRG.jpg" />
+    </di:description>
+    <di:language>eng</di:language>
+    <di:rights>Universal Studios</di:rights>
+  </di:discinfo>
+</disclib>

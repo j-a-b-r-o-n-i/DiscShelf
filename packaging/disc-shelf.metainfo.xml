@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A template: the Flatpak manifest replaces @APP_ID@ and @DEVELOPER_ID@ and installs it as
+     share/metainfo/<app id>.metainfo.xml. -->
+<component type="desktop-application">
+  <id>@APP_ID@</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Disc Shelf</name>
+  <summary>Rip Blu-ray discs and file the episodes for Plex</summary>
+
+  <developer id="@DEVELOPER_ID@">
+    <name>j-a-b-r-o-n-i</name>
+  </developer>
+
+  <description>
+    <p>
+      Disc Shelf copies your Blu-ray, 4K UHD and DVD discs to your computer with MakeMKV,
+      works out which title on the disc is which episode, and copies the files to a folder
+      on your NAS or media server, named the way Plex expects.
+    </p>
+    <p>Put a disc in, check the episode list Disc Shelf suggests, and start the rip. It can:</p>
+    <ul>
+      <li>Match titles to episodes using TVmaze, TheDiscDB, the on-screen title cards, or a photo of the back of the case</li>
+      <li>Keep the original video untouched, or convert Dolby Vision and HDR to suit your TV</li>
+      <li>Keep only the audio and subtitle languages you choose</li>
+      <li>Copy each episode to the NAS as soon as it is ripped, check the copy, and ask Plex to look for it</li>
+      <li>Make a smaller AV1 copy of 4K films and shows on the processor or an NVIDIA graphics card</li>
+    </ul>
+    <p>
+      Disc Shelf needs MakeMKV, which is free while in beta and is installed separately from
+      Flathub. The first-run setup offers to install it and checks that your drive is ready.
+      Disc Shelf only reads discs you own; it does not download anything to watch.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">@APP_ID@.desktop</launchable>
+  <provides>
+    <binary>disc-shelf</binary>
+  </provides>
+
+  <url type="homepage">https://github.com/j-a-b-r-o-n-i/DiscShelf</url>
+  <url type="bugtracker">https://github.com/j-a-b-r-o-n-i/DiscShelf/issues</url>
+  <url type="vcs-browser">https://github.com/j-a-b-r-o-n-i/DiscShelf</url>
+
+  <!-- Taken in sample mode by scripts/screenshots.py, and loaded from the release tag. -->
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/j-a-b-r-o-n-i/DiscShelf/v0.1.0/packaging/screenshots/rip.png</image>
+      <caption>Ripping a disc, with each title matched to an episode</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/j-a-b-r-o-n-i/DiscShelf/v0.1.0/packaging/screenshots/match.png</image>
+      <caption>Checking the episode matches before copying to the NAS</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/j-a-b-r-o-n-i/DiscShelf/v0.1.0/packaging/screenshots/queue.png</image>
+      <caption>The queue of discs and what each one still needs</caption>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Video</category>
+  </categories>
+  <keywords>
+    <keyword>Blu-ray</keyword>
+    <keyword>MakeMKV</keyword>
+    <keyword>rip</keyword>
+    <keyword>Plex</keyword>
+    <keyword>4K</keyword>
+  </keywords>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#fbe3b8</color>
+    <color type="primary" scheme_preference="dark">#3a2a12</color>
+  </branding>
+
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-10-26">
+      <description>
+        <p>The first release packaged for Flathub.</p>
+      </description>
+    </release>
+  </releases>
+</component>

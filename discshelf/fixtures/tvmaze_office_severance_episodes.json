@@ -1,0 +1,342 @@
+{
+"The Office": [
+{
+"season": 2,
+"number": 1,
+"name": "The Dundies",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 2,
+"name": "Sexual Harassment",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 3,
+"name": "Office Olympics",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 4,
+"name": "The Fire",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 5,
+"name": "Halloween",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 6,
+"name": "The Fight",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 7,
+"name": "The Client",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 8,
+"name": "Performance Review",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 9,
+"name": "E-Mail Surveillance",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 10,
+"name": "Christmas Party",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 11,
+"name": "Booze Cruise",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 12,
+"name": "The Injury",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 13,
+"name": "The Secret",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 14,
+"name": "The Carpet",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 15,
+"name": "Boys and Girls",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 16,
+"name": "Valentine's Day",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 17,
+"name": "Dwight's Speech",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 18,
+"name": "Take Your Daughter to Work Day",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 19,
+"name": "Michael's Birthday",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 20,
+"name": "Drug Testing",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 21,
+"name": "Conflict Resolution",
+"runtime": 30
+},
+{
+"season": 2,
+"number": 22,
+"name": "Casino Night",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 1,
+"name": "Gay Witch Hunt",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 2,
+"name": "The Convention",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 3,
+"name": "The Coup",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 4,
+"name": "Grief Counseling",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 5,
+"name": "Initiation",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 6,
+"name": "Diwali",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 7,
+"name": "Branch Closing",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 8,
+"name": "The Merger",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 9,
+"name": "The Convict",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 10,
+"name": "A Benihana Christmas (1)",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 11,
+"name": "A Benihana Christmas (2)",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 12,
+"name": "Back from Vacation",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 13,
+"name": "Traveling Salesmen",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 14,
+"name": "The Return",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 15,
+"name": "Ben Franklin",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 16,
+"name": "Phyllis' Wedding",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 17,
+"name": "Business School",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 18,
+"name": "Cocktails",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 19,
+"name": "The Negotiation",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 20,
+"name": "Safety Training",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 21,
+"name": "Product Recall",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 22,
+"name": "Women's Appreciation",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 23,
+"name": "Beach Games",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 24,
+"name": "The Job (1)",
+"runtime": 30
+},
+{
+"season": 3,
+"number": 25,
+"name": "The Job (2)",
+"runtime": 30
+}
+],
+"Severance": [
+{
+"season": 1,
+"number": 1,
+"name": "Good News About Hell",
+"runtime": 57
+},
+{
+"season": 1,
+"number": 2,
+"name": "Half Loop",
+"runtime": 53
+},
+{
+"season": 1,
+"number": 3,
+"name": "In Perpetuity",
+"runtime": 56
+},
+{
+"season": 1,
+"number": 4,
+"name": "The You You Are",
+"runtime": 46
+},
+{
+"season": 1,
+"number": 5,
+"name": "The Grim Barbarity of Optics and Design",
+"runtime": 43
+},
+{
+"season": 1,
+"number": 6,
+"name": "Hide and Seek",
+"runtime": 40
+},
+{
+"season": 1,
+"number": 7,
+"name": "Defiant Jazz",
+"runtime": 49
+},
+{
+"season": 1,
+"number": 8,
+"name": "What's for Dinner?",
+"runtime": 46
+},
+{
+"season": 1,
+"number": 9,
+"name": "The We We Are",
+"runtime": 40
+}
+]
+}

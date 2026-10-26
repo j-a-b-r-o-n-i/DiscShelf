@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+
+# Flatpak builds (see packaging/io.github.j_a_b_r_o_n_i.DiscShelf.yml)
+.flatpak-build/
+.flatpak-builder/
+build-dir/
+repo/
+*.flatpak
+
+# Half-copied files
+*.partial
