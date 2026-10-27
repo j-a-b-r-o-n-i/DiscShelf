@@ -27,9 +27,12 @@ import importlib.util
 import io
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
+import tempfile
+import threading
 from dataclasses import dataclass
 
 OCR_VENV = os.path.expanduser("~/.local/share/disc-shelf/ocr")
@@ -188,3 +191,79 @@ def read_images(paths: list[str], run=subprocess.run) -> list[list[OcrLine]]:
             raise OcrError("This copy of Disc Shelf is missing its text reader; reinstall it from Flathub.")
         raise OcrError("No OCR engine is installed; run make install-disc-shelf to add RapidOCR and tesseract.")
     return _tesseract(paths, run)
+
+
+class Session:
+    """read_images for many small batches in a row: one RapidOCR helper stays running and
+    loads its models once (about 0.7 s, against 0.3 s a frame to read). With tesseract, or
+    when the helper can't start, each batch goes through read_images. Use it in a with block."""
+
+    def __init__(self, popen=subprocess.Popen):
+        self._popen = popen
+        self._proc = None
+        self._lines: queue.Queue = queue.Queue()
+        self._err = None
+
+    def __enter__(self) -> "Session":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def _start(self) -> bool:
+        helper = _helper_python()
+        if not helper:
+            return False
+        self._err = tempfile.TemporaryFile(mode="w+")
+        try:
+            self._proc = self._popen(_nice() + [helper[0], *helper[1], HELPER, "--serve"], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=self._err, text=True, bufsize=1)
+        except OSError:
+            self._proc = None
+            return False
+        out = self._proc.stdout
+        threading.Thread(target=lambda: [self._lines.put(ln) for ln in out] + [self._lines.put(None)],
+                         daemon=True, name="discshelf-ocr").start()
+        return True
+
+    def read(self, paths: list[str]) -> list[list[OcrLine]]:
+        """The text lines on each image, as read_images gives them."""
+        if not paths:
+            return []
+        if self._proc is None and not self._start():
+            return read_images(paths)
+        try:
+            self._proc.stdin.write(json.dumps(list(paths)) + "\n")
+            self._proc.stdin.flush()
+        except OSError as e:
+            raise OcrError(f"RapidOCR stopped ({e}).") from e
+        while True:
+            try:
+                line = self._lines.get(timeout=60 + 15 * len(paths))
+            except queue.Empty:
+                self.close()
+                raise OcrError("RapidOCR did not finish reading the frames.") from None
+            if line is None:
+                self._err.seek(0)
+                last = self._err.read().strip().splitlines()[-1:] or ["no message"]
+                self._proc = None
+                raise OcrError(f"RapidOCR stopped: {last[0]}")
+            try:
+                data = json.loads(line)
+            except ValueError:
+                continue         # a library printing to stdout; the batch's line follows
+            if isinstance(data, list) and len(data) == len(paths):
+                return [[OcrLine(str(t), float(c), int(x), int(y), int(w), int(h)) for t, c, x, y, w, h in img]
+                        for img in data]
+
+    def close(self) -> None:
+        proc, self._proc = self._proc, None
+        if proc is not None:
+            try:
+                proc.stdin.close()
+                proc.wait(timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                proc.kill()
+        if self._err is not None:
+            self._err.close()
+            self._err = None

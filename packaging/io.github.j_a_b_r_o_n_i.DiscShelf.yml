@@ -142,6 +142,26 @@ modules:
         url: https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
         sha256: 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
 
+  # ---------------------------------------------------------------- chromaprint
+  # fpcalc fingerprints a title's opening audio, so the title card reader can skip the theme
+  # song (discshelf/theme.py). Only the tool is built, against the static ffmpeg above;
+  # CMake's FFmpeg search doesn't know that ffmpeg's own libraries, so pkg-config --static
+  # adds them. The FFT is the bundled KissFFT, which gives the same fingerprints as FFmpeg's.
+  - name: chromaprint
+    buildsystem: simple
+    build-commands:
+      - >-
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${FLATPAK_DEST}
+        -DFFMPEG_ROOT=${FLATPAK_DEST} -DBUILD_TOOLS=ON -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+        -DFFT_LIB=kissfft -DAUDIO_PROCESSOR_LIB=swresample
+        "-DCMAKE_CXX_STANDARD_LIBRARIES=$(pkg-config --static --libs libavformat libavcodec libswresample libavutil)"
+      - ninja -C build
+      - install -Dm755 build/src/cmd/fpcalc ${FLATPAK_DEST}/bin/fpcalc
+    sources:
+      - type: archive
+        url: https://github.com/acoustid/chromaprint/releases/download/v1.6.1/chromaprint-1.6.1.tar.gz
+        sha256: 3368805af0ee47b9df74df10b5001a44569e01df2844dab520031720dde9ad23
+
   # ---------------------------------------------------------------- mkvtoolnix
   # Only the command-line tools; Qt comes from the KDE SDK. libebml, libmatroska, pugixml
   # and fmt are bundled in its source. Based on Flathub's org.bunkus.mkvtoolnix-gui.

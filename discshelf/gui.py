@@ -3186,7 +3186,7 @@ class MatchPage(QWidget):
                 secs = int(sum(took) / len(took) * (waiting + reading) / max(1, reading or 1))
                 left = (f"about {secs // 60} min {secs % 60:02d} s left · " if secs >= 60 else
                         f"about {secs} s left · " if secs >= 5 else "a few seconds left · ")
-            self.cards_sub.setText(f"{left}{reading} at a time. Each title's first 90 seconds are read with OCR, "
+            self.cards_sub.setText(f"{left}{reading} at a time. Each title is read with OCR up to its card, "
                                    "and matches update as each card is read.")
             self.win.cards_progress = (done, n)
         elif stopped:
@@ -5923,10 +5923,19 @@ class SettingsPage(QWidget):
         matching.lay.addWidget(label("Matching", "h2"))
         self.read_cards = QCheckBox()
         matching.lay.addWidget(Option(self.read_cards, "Read title cards to match episodes",
-                                      "Many shows put the episode's name on screen near the start. Each title's first "
-                                      "90 seconds are read with OCR as soon as it's ripped, and a title whose match is "
-                                      "only a guess from running times waits about 30 seconds for it. A disc TheDiscDB "
+                                      "Many shows put the episode's name on screen near the start. Each title is read "
+                                      "with OCR as soon as it's ripped, skipping the theme song, and a title whose "
+                                      "match is only a guess from running times waits for it. A disc TheDiscDB "
                                       "knows, or a list you enter from the case, always wins."))
+        self.card_minutes = NoWheelComboBox()
+        for m in (2, 5, 10, 20):
+            self.card_minutes.addItem(f"{m} minutes" + (" (default)" if m == 5 else ""), m)
+        self.card_minutes.setMaximumWidth(220)
+        matching.lay.addWidget(field("Look for the title card up to", self.card_minutes))
+        matching.lay.addWidget(label("Reading stops at the first frame that names an episode, so a card a minute in "
+                                     "takes about 5 seconds. A title with no card is read to the limit, which takes "
+                                     "30 seconds to a minute for 5 minutes. Choose more for a show with a long "
+                                     "opening scene.", "small", wrap=True))
         col.addWidget(matching)
 
         # AV1 versions of 4K discs: a smaller second copy; the remux is always kept.
@@ -6123,6 +6132,8 @@ class SettingsPage(QWidget):
         self.copy_as_ripped.setChecked(cfg.copy_as_ripped)
         self.stream_films.setChecked(cfg.stream_films)
         self.read_cards.setChecked(cfg.read_title_cards)
+        i = self.card_minutes.findData(getattr(cfg, "card_search_minutes", 5))
+        self.card_minutes.setCurrentIndex(i if i >= 0 else self.card_minutes.findData(5))
         self.av1_on.setChecked(getattr(cfg, "av1_enabled", False))
         self.av1_box.setVisible(self.av1_on.isChecked())
         enc = getattr(cfg, "av1_encoder", "cpu")
@@ -6289,6 +6300,7 @@ class SettingsPage(QWidget):
         cfg.copy_as_ripped = self.copy_as_ripped.isChecked()
         cfg.stream_films = self.stream_films.isChecked()
         cfg.read_title_cards = self.read_cards.isChecked()
+        cfg.card_search_minutes = self.card_minutes.currentData()
         cfg.av1_enabled = self.av1_on.isChecked()
         cfg.av1_encoder = self.av1_encoder()
         cfg.av1_quality = self.av1_quality.value()
@@ -6307,6 +6319,7 @@ class SettingsPage(QWidget):
                 setattr(cfg, f, getattr(old, f))
             for f in self.NAME_FIELDS:
                 setattr(cfg, f, getattr(old, f))
+            cfg.card_search_minutes = old.card_search_minutes
             self.win.error("Couldn't save the settings", str(exc), "Check there is free space in your home folder.")
             return
         self.saved.setText("Settings saved.")

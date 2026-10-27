@@ -28,7 +28,8 @@ import threading
 import time
 from typing import Callable
 
-from . import av1, caseocr, classify, config, discdb, discinfo, hdr, makemkv, match, naming, ocr, titlecard, transfer, watch
+from . import (av1, caseocr, classify, config, discdb, discinfo, hdr, makemkv, match, naming, ocr, theme, titlecard,
+               transfer, watch)
 from . import play, season
 from .config import Config
 from .jobs import JobStore, now_iso
@@ -1442,13 +1443,29 @@ class Controller(QueueViews, season.SeasonChecks):
                     run.card_pending.discard(ti)
                     self._queue_ready(job)
 
-    def _read_one(self, job: Job, ti: int, path: str) -> titlecard.TitleReading:
-        """Read one title's card, keeping its status up to date. Raises what read_title raises."""
+    def _themes(self, job: Job) -> theme.ThemeBook | None:
+        key = job.show_id if job.show_id is not None else job.show
+        return theme.ThemeBook(str(key)) if key not in (None, "") else None
+
+    def _card_episodes(self, job: Job) -> list[Episode]:
+        """The show's episodes, for the card reader to stop at; [] reads each title to the limit."""
+        if job.show_id is None:
+            return []
+        try:
+            return self.tvmaze.episodes(job.show_id, None)
+        except Exception:  # noqa: BLE001 -- TVmaze being down only costs the early stop
+            return []
+
+    def _read_one(self, job: Job, ti: int, path: str, again: bool = True) -> titlecard.TitleReading:
+        """Read one title's card, keeping its status up to date. Raises what scan_title raises."""
         with self.job_lock:
             st = self._card_state.setdefault(job.id, {}).setdefault(ti, CardStatus())
             st.state, st.started, st.note = "reading", time.monotonic(), ""
+        themes = self._themes(job)
         try:
-            reading = titlecard.read_title(path, ffmpeg=self.cfg.ffmpeg)
+            reading = titlecard.scan_title(path, self._card_episodes(job),
+                                           limit_s=max(1, self.cfg.card_search_minutes) * 60, themes=themes,
+                                           ffmpeg=self.cfg.ffmpeg, fpcalc=self.cfg.fpcalc)
         except Exception as e:
             with self.job_lock:
                 st.state, st.note, st.seconds = "failed", str(e) or type(e).__name__, time.monotonic() - st.started
@@ -1456,6 +1473,19 @@ class Controller(QueueViews, season.SeasonChecks):
         with self.job_lock:
             self._cards.setdefault(job.id, {})[ti] = reading
             st.state, st.seconds = "read", time.monotonic() - st.started
+            earlier = [(i, r) for i, r in self._cards[job.id].items() if i != ti]
+        # A title read before its show's theme was learned (the first one) was read from the
+        # start. If it stopped during what turned out to be the theme, it likely stopped at
+        # the show's own caption, so it is read again from the theme's end.
+        if themes is not None and again:
+            with self.job_lock:
+                redo = [(i, r) for i, r in earlier if titlecard.place_theme(r, themes)]
+            for i, r in redo:
+                try:
+                    self._read_one(job, i, r.path, again=False)
+                except Exception:  # noqa: BLE001 -- the first reading stays
+                    with self.job_lock:
+                        self._card_state[job.id][i].state = "read"
         return reading
 
     def card_status(self, job: Job) -> dict[int, CardStatus]:

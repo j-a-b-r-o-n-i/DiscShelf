@@ -10,6 +10,9 @@
   one is.
 - A season grid on the Match page shows where every episode of the season is.
 - Watch opens a ripped title in mpv or VLC, at its title card when the card was read.
+- Title cards are found up to 20 minutes into a title: the theme song is recognised by its
+  sound and skipped, and reading stops at the first frame that names an episode. Settings
+  has a choice of how far to look.
 
 ## 0.1.0 (unreleased)
 

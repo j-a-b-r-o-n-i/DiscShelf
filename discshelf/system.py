@@ -259,7 +259,8 @@ def _join(names: list[str]) -> str:
 def _check_tools(h: Host, cfg) -> Check:
     title = "Video tools"
     required = [cfg.ffmpeg, cfg.ffprobe, cfg.mkvmerge, "rsync"]     # rsync copies to the NAS
-    optional = {cfg.dovi_tool: "Dolby Vision conversions", "tesseract": "the backup text reader"}
+    optional = {cfg.dovi_tool: "Dolby Vision conversions", "tesseract": "the backup text reader",
+                getattr(cfg, "fpcalc", "fpcalc"): "skipping theme songs when reading title cards"}
     missing = [t for t in required if not _resolve(h, t)]
     absent = [t for t in optional if not _resolve(h, t)]
     notes = []

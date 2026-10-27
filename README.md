@@ -22,7 +22,7 @@ format kept, unless you ask for a smaller AV1 copy as well.
   that knows:
   1. the episode list printed on the case, typed in or read from a photo of it;
   2. [TheDiscDB](https://thediscdb.com), a community record of what's on each disc;
-  3. the episode's title card, read from the first 90 seconds of video;
+  3. the episode's title card, read from the opening minutes after the theme song;
   4. running times, as a last guess.
 
   Anything it isn't sure about is marked **Check**, with the reason, and waits for you.
@@ -70,7 +70,7 @@ Then open **Disc Shelf**. The first-run setup checks the computer and fixes what
 - **Plex** (optional): sign in once so each disc is added to the right library straight away.
 
 Everything else is inside the Flatpak: ffmpeg (with SVT-AV1, NVENC and VMAF), mkvmerge,
-dovi_tool, Tesseract and the RapidOCR models.
+dovi_tool, Chromaprint's fpcalc, Tesseract and the RapidOCR models.
 
 ### From source
 
@@ -79,7 +79,7 @@ Python 3.11 or newer, and on Arch or Fedora the installer sets up the rest:
 ```bash
 git clone https://github.com/j-a-b-r-o-n-i/DiscShelf
 cd disc-shelf
-bash scripts/install_disc_shelf.sh    # MakeMKV, ffmpeg, mkvtoolnix, tesseract, dovi_tool, OCR, launcher
+bash scripts/install_disc_shelf.sh    # MakeMKV, ffmpeg, mkvtoolnix, tesseract, chromaprint, dovi_tool, OCR, launcher
 disc-shelf                            # or: python3 scripts/disc_shelf.py
 ```
 
