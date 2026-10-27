@@ -671,14 +671,3 @@ class SeasonChecks:
                     queue_ready(job)
         return season_status(job, mine, others, episodes, problems, discs, lib_count)
 
-
-def with_version(rel: str | None, m: Match) -> str | None:
-    """Put a match's version (" - Short cut") before the extension of an episode's path, unless
-    the path already carries it."""
-    if not rel or not m.version or m.target != "episode":
-        return rel
-    v = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", m.version).strip(" .")
-    if not v or f" - {v}".casefold() in rel.casefold():
-        return rel
-    root, ext = posixpath.splitext(rel)
-    return f"{root} - {v}{ext}"

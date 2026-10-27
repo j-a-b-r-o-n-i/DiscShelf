@@ -845,6 +845,7 @@ class Controller(QueueViews, season.SeasonChecks):
         self._last_drives: list[Drive] = []
         self._busy: set[str] = set()                           # job ids with a copy or a re-check running
         self._show_eps: dict[int, tuple[float, list | None]] = {}   # show id → (when, every episode or None)
+        self._show_dirs: dict[tuple, tuple[float, str]] = {}   # (destination, show, year) -> (when, folder)
         self.plex_fetch = None                                 # plex.Fetch for tests; None uses the network
         # The AV1 encoder: one thread for the whole app, one encode at a time, in the order queued.
         self._enc_jobs: dict[str, Job] = {}                    # job id → the live Job of each disc with encodes to do
@@ -1804,10 +1805,12 @@ class Controller(QueueViews, season.SeasonChecks):
                  if f.dest_rel and f.title_index in self._locked(job)}
         order = sorted({m.title_index for m in job.matches} - set(fixed))
         by = {m.title_index: m for m in job.matches}
+        scheme = naming.Scheme.from_config(self.cfg)
+        show_dir = self._show_dir(job, scheme) if layout != "movie" else ""
         rels: list[str | None] = []
         for ti in order:
             try:
-                rels.append(season.with_version(naming.relpath_for(job, by[ti], layout), by[ti]))
+                rels.append(naming.relpath_for(job, by[ti], layout, scheme, show_dir=show_dir))
             except ValueError:
                 if strict:
                     raise
@@ -1816,6 +1819,23 @@ class Controller(QueueViews, season.SeasonChecks):
         out: dict[int, str | None] = dict(fixed)
         out.update(zip(order, names))
         return out
+
+    def _show_dir(self, job: Job, scheme: "naming.Scheme") -> str:
+        """The show's folder when the destination already has one ("Bluey" or "bluey (2018)"),
+        so a new rip joins it rather than making a second folder for the same show; "" uses
+        the scheme's. The listing is remembered for a minute, as this runs on every preview."""
+        if not job.show.strip() or not job.destination:
+            return ""
+        key = (job.destination, job.show, job.year)
+        hit = self._show_dirs.get(key)
+        if hit is None or time.monotonic() - hit[0] > 60:
+            try:
+                names = [e.name for e in os.scandir(job.destination) if e.is_dir()]
+            except OSError:
+                names = []
+            hit = (time.monotonic(), naming.existing_show_folder(names, job.show, job.year, scheme) or "")
+            self._show_dirs[key] = hit
+        return hit[1]
 
     def plan_paths(self, job: Job) -> list[RippedFile]:
         with self.job_lock:
@@ -2243,9 +2263,10 @@ class Controller(QueueViews, season.SeasonChecks):
         if main:
             folder = collections.Counter(main).most_common(1)[0][0]
         elif job.show.strip():
-            folder = naming.show_folder(job.show, job.year)
+            scheme = naming.Scheme.from_config(self.cfg)
+            folder = naming.show_folder(job.show, job.year, scheme)
             if self._layout(job) != "movie" and job.season is not None:
-                folder += f"/Season {job.season:02d}"
+                folder += "/" + naming.season_folder(job.season, scheme)
         else:
             folder = ""
         return os.path.join(job.destination, folder) if folder else job.destination
@@ -2794,6 +2815,19 @@ class Controller(QueueViews, season.SeasonChecks):
 
     def plex_signed_in(self) -> bool:
         return bool(config.load_secret("plex_token"))
+
+    def plex_scan_folder(self, library: str, rel: str) -> str:
+        """Ask Plex to scan one folder of a library; rel is under the destination folder. Returns
+        a sentence for the Library page. Raises PlexError when Plex can't be asked."""
+        token = config.load_secret("plex_token")
+        if not library or not self.cfg.plex_url or not token:
+            return "Plex wasn't asked to scan: sign in to Plex and choose its library for this destination in Settings."
+        plex = Plex(self.cfg.plex_url, token, fetch=self.plex_fetch)
+        section = plex.section(library)
+        if not section:
+            raise PlexError(f"Plex has no library called “{library}”. Choose the right one in Settings.")
+        plex.refresh(section["key"], plex.plex_path(section, rel))
+        return f"Plex is scanning {rel}."
 
     def plex_libraries(self) -> list[str]:
         token = config.load_secret("plex_token")

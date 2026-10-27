@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
-from discshelf import discdb, pipeline, season  # noqa: E402
+from discshelf import discdb, naming, pipeline, season  # noqa: E402
 from discshelf.config import Config, Destination  # noqa: E402
 from discshelf.jobs import JobStore  # noqa: E402
 from discshelf.models import Episode, Job, Match, RippedFile, Title, TitleProgress  # noqa: E402
@@ -115,12 +115,8 @@ def run():
     d3.matches = season.fix_version(d3.matches, d3, 2, p)
     check(by(d3, 2).version == "Short cut" and by(d3, 2).confirmed, "fix_version didn't set the version")
     check(not season.find_problems(season.title_holders(d3), []), "a second version still clashes")
-    rel = "Show (2019)/Season 01/Show (2019) - S01E09.mkv"
-    check(season.with_version(rel, by(d3, 2)) == "Show (2019)/Season 01/Show (2019) - S01E09 - Short cut.mkv",
-          f"with_version: {season.with_version(rel, by(d3, 2))}")
-    check(season.with_version(rel.replace(".mkv", " - Short cut.mkv"), by(d3, 2)).count("Short cut") == 1,
-          "with_version added the version twice")
-    check(season.with_version(rel, by(d3, 1)) == rel, "a title without a version was renamed")
+    rel = naming.relpath_for(d3, by(d3, 2), "tv")
+    check(rel.endswith("S01E09 - Tadpoles - Short cut.mkv"), f"second version's file name: {rel}")
 
     # --- the fixes ------------------------------------------------------------------
     d4 = disc("d4", "KITES_S1_D4", 4, [10, 10], lengths={2: 434})
@@ -256,7 +252,7 @@ def run():
         check(not by(b, 1).held and not by(b, 3).held and by(b, 1).ready, "settling didn't release the titles")
         check(by(b, 3).version == "Short cut", "the version wasn't kept")
         paths = dict(ctl.preview_paths(b))
-        check(paths.get(3, "").endswith("S01E06 - Short cut.mkv") and paths.get(1, "").endswith("S01E06.mkv"),
+        check(paths.get(3, "").endswith("S01E06 - Marbles - Short cut.mkv") and paths.get(1, "").endswith("S01E06 - Marbles.mkv"),
               f"paths: {paths.get(1)} / {paths.get(3)}")
 
     for f in failures:

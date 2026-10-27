@@ -116,7 +116,7 @@ def run():
     t27 = next(x for x in job.matches if x.title_index == 27)
     check(t27.version == "Short cut" and not t27.held and t27.ready, f"title 27: {t27.version!r} {t27.held!r}")
     paths = dict(ctl.preview_paths(job))
-    check(paths.get(27, "").endswith("S01E51 - Short cut.mkv"), f"path: {paths.get(27)}")
+    check(paths.get(27, "").endswith("S01E51 - Daddy Putdown - Short cut.mkv"), f"path: {paths.get(27)}")
     check(m.confirm_btn.isEnabled(), "Confirm and copy still waits")
 
     # Picking the same episode again for another title brings the problem back at once,
