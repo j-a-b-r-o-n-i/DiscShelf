@@ -119,8 +119,9 @@ The fixes depend on what's wrong:
   were checked (both from another disc of the season, or this disc's own copied titles):
   keep the odd one (a dub, then the shorter, then the " (2)" copy) as the French version or
   a second version, move it to `Featurettes`, set it aside in "<show>/Set aside/" (which
-  holds a `.plexignore`, so Plex skips it; nothing is deleted), or swap the two so the other
-  becomes the version. The panel lists the old and new names, and can ask Plex to rescan the
+  holds a `.plexignore`, so Plex skips it; nothing is deleted), delete it with its subtitles
+  (after a confirmation, with no Undo; the disc's records mark the title as skipped), or swap
+  the two so the other becomes the version. The panel lists the old and new names, and can ask Plex to rescan the
   season folder. The renames go through the Library page's rename, so subtitles and other
   sidecars move with the file and nothing is overwritten. The job that copied the file is
   updated too (its file name, version, or extra), so the season check stops flagging it and

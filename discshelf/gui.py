@@ -3577,6 +3577,11 @@ class MatchPage(QWidget):
                 pl = nasfix.plan(p, key, scheme)
             except ValueError:
                 continue
+            if pl.deletes:
+                n = len(pl.deletes)
+                opts.append(FixOption(key, lab, what, f"Delete {n} file{'s' if n != 1 else ''}",
+                                      [(rel, "") for rel in pl.deletes], note="This can't be undone."))
+                continue
             n = len(pl.moves)
             opts.append(FixOption(key, lab + (" (suggested)" if suggested else ""), what,
                                   f"Rename {n} file{'s' if n != 1 else ''}", pl.moves))
@@ -3753,8 +3758,19 @@ class MatchPage(QWidget):
         job, ctl = self.job, self.win.ctl
         plan = nasfix.plan(p, key, naming.Scheme.from_config(self.win.cfg))
         rescan = self.compare.rescan.isChecked() and bool(self.compare.rescan.text())
+        if plan.deletes:
+            names = "\n".join(os.path.basename(rel) for rel in plan.deletes)
+            if QMessageBox.question(self, "Delete from the NAS?",
+                                    f"{names}\n\nThis deletes the file and its subtitles from the NAS. It can't be "
+                                    "undone.") != QMessageBox.StandardButton.Yes:
+                return
 
         def ok(done):
+            if not done.log:
+                self.fix_done = (done.text, None)
+                self.after_nas()
+                return
+
             def undo(done=done, key=p.key):
                 def undone(text):
                     self.fix_done = (text, None)

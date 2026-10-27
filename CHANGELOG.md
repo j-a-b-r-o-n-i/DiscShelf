@@ -17,8 +17,9 @@
   fixes as choices that say what happens, and Undo. The rest opens what's known about it.
 - Two files already on the NAS for one episode, from a disc copied before duplicates were
   checked, can be fixed from the Match page: keep one as the French (or second) version,
-  move it to Featurettes, set it aside, or swap them. The files are renamed with the Library
-  page's rename and the disc's records are updated; Undo reverses both.
+  move it to Featurettes, set it aside, delete it, or swap them. The files are renamed with the
+  Library page's rename and the disc's records are updated; Undo reverses both. A delete asks
+  first and can't be undone.
 - A match that needs a check can have just its title card read; when the card agrees,
   confirming is one click.
 - Discs without a disc number are numbered by the order they were ripped, and named by

@@ -2,7 +2,7 @@
 
 This is the case a season check finds after the fact: a disc copied before duplicates were
 checked left "Show - S01E20.mkv" and "Show - S01E20 (2).mkv" side by side. One of them (the
-odd one: a dub, a shorter cut, the " (2)" copy) is renamed, and the job that copied it is told,
+odd one: a dub, a shorter cut, the " (2)" copy) is renamed or deleted, and the job that copied it is told,
 so its records match the NAS and the season check stops flagging it.
 
 plan() only works out names. The renames themselves go through library.apply(), which moves
@@ -22,7 +22,7 @@ from .library import PLEXIGNORE, SET_ASIDE
 from .models import Job, Match
 from .season import SHORT_CUT_S, Holder, Problem, lang_name
 
-FIXES = ("version", "extra", "aside", "swap")
+FIXES = ("version", "extra", "aside", "delete", "swap")
 
 
 @dataclass
@@ -43,6 +43,7 @@ class Plan:
     moves: list[tuple[str, str]]             # (old, new) under the destination, videos only
     changes: list[Change]                    # job records to update (none for a file no job copied)
     extra_files: list[tuple[str, str]] = field(default_factory=list)   # e.g. Set aside/.plexignore
+    deletes: list[str] = field(default_factory=list)   # videos to delete, for the delete fix (no undo)
     scan_folder: str = ""        # the season folder, for Plex to rescan
     result: str = ""             # one sentence once it's done
 
@@ -51,7 +52,7 @@ class Plan:
 class Done:
     """An applied fix, for Undo."""
     plan: Plan
-    log: str                     # library.apply's undo log
+    log: str                     # library.apply's undo log, "" for a delete
     before: list[tuple[str, int, Match | None, str]]   # (job id, title, its match before, its dest_rel before)
     text: str
 
@@ -107,7 +108,9 @@ def options(problem: Problem) -> list[tuple[str, str, str, bool]]:
            ("extra", f"Move {who_l} to Featurettes", f"It's moved to Featurettes as “{extra_name(name, odd, kept)}”. "
                                                      "Plex lists it with the show's extras.", False),
            ("aside", f"Set {who_l} aside", f"It's moved to “{SET_ASIDE}” in the show's folder, which Plex skips. "
-                                           "Nothing is deleted.", False)]
+                                           "Nothing is deleted.", False),
+           ("delete", f"Delete {who_l}", "It's deleted from the NAS, with its subtitles. This can't be undone.",
+            False)]
     if kept.dest_rel and odd.dest_rel:
         other = describe(kept)
         other_l = other[:1].lower() + other[1:] if kept.where != "library" else other
@@ -163,6 +166,9 @@ def plan(problem: Problem, fix: str, scheme: naming.Scheme | None = None) -> Pla
                     change(odd, dst, target="skip", note=f"Set aside on the NAS in “{SET_ASIDE}”, which Plex skips."),
                     extra_files=[(f"{folder}/{SET_ASIDE}/{PLEXIGNORE[0]}", PLEXIGNORE[1])], scan_folder=season_dir,
                     result=f"{who} is set aside in “{folder}/{SET_ASIDE}”.")
+    if fix == "delete":
+        return Plan(fix, [], change(odd, "", target="skip", note="Deleted from the NAS."), deletes=[odd.dest_rel],
+                    scan_folder=season_dir, result=f"{who} is deleted from the NAS: “{posixpath.basename(odd.dest_rel)}”.")
     if fix == "swap":
         dub = dub_language(odd, kept)
         other_label = lang_name(kept.audio[0]) if dub and kept.audio else label
@@ -232,6 +238,21 @@ def restore_records(jobs: dict[str, Job], before: list[tuple[str, int, Match | N
             f.dest_rel = rel
         if m is not None:
             job.matches = [_copy.deepcopy(m) if x.title_index == ti else x for x in job.matches]
+
+
+def delete_files(root: str, rels: list[str]) -> list[str]:
+    """Delete each video and its sidecars under root; returns what was deleted. Raises
+    library.RenameError, before deleting anything, when a video isn't there."""
+    from .library import RenameError
+    for rel in rels:
+        if not os.path.isfile(os.path.join(root, rel)):
+            raise RenameError(f"“{rel}” isn't there any more. Check the show again.")
+    pairs = with_sidecars([(rel, rel) for rel in rels], listing_for(root, [(rel, rel) for rel in rels]))
+    gone = []
+    for rel, _same in pairs:
+        os.remove(os.path.join(root, rel))
+        gone.append(rel)
+    return gone
 
 
 def listing_for(root: str, moves: list[tuple[str, str]]) -> dict[str, list[str]]:
@@ -304,8 +325,13 @@ class NasFixes:
         library.RenameError when a file is missing or a new name is taken; nothing changes then."""
         from . import library
         root = self.fix_root(job)
-        moves = with_sidecars(p.moves, listing_for(root, p.moves))
-        log = library.apply(root, moves, self.fix_undo_dir(), p.result, p.extra_files, scan_folders=[p.scan_folder])
+        if p.deletes:
+            log = ""
+            delete_files(root, p.deletes)
+        else:
+            moves = with_sidecars(p.moves, listing_for(root, p.moves))
+            log = library.apply(root, moves, self.fix_undo_dir(), p.result, p.extra_files,
+                                scan_folders=[p.scan_folder])
         jobs = self._fix_jobs(job, p)
         with self.job_lock:
             before = apply_records(jobs, p)

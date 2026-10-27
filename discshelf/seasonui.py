@@ -182,7 +182,8 @@ class FixOption:
     label: str                   # "Keep title 26 as the French version (suggested)"
     what: str                    # what happens, in a sentence or two
     apply: str = ""              # the apply button's text when it's chosen: "Rename 1 file"
-    changes: list[tuple[str, str]] = field(default_factory=list)   # (old, new) on the NAS
+    changes: list[tuple[str, str]] = field(default_factory=list)   # (old, new) on the NAS, new "" when deleted
+    note: str = ""               # replaces the view's note beside the apply button
 
 
 @dataclass
@@ -403,14 +404,15 @@ class ComparePanel(QFrame):
                          and v.options[self.group.id(b)].key == self.selected)
         changes = o.changes if o else []
         self.change_lines.setText("<br>".join(
-            f'<span style="font-family:monospace; color:#E59A94; text-decoration:line-through">{_esc(a)}</span><br>'
-            f'<span style="font-family:monospace; color:#8FE0B0">{_esc(b)}</span>' for a, b in changes))
+            f'<span style="font-family:monospace; color:#E59A94; text-decoration:line-through">{_esc(a)}</span><br>' +
+            (f'<span style="font-family:monospace; color:#8FE0B0">{_esc(b)}</span>' if b else
+             '<span style="color:#E59A94">Deleted</span>') for a, b in changes))
         self.change_box.setVisible(bool(changes))
         self.rescan.setVisible(bool(changes) and bool(v and v.rescan))
         self.apply_row.setVisible(o is not None)
         self.apply_btn.setText(v.busy if v and v.busy else (o.apply if o else ""))
         self.apply_btn.setEnabled(not (v and v.busy))
-        self.apply_note.setText(v.note if v else "")
+        self.apply_note.setText((o.note if o and o.note else v.note) if v else "")
 
     def set_result(self, text: str, can_undo: bool = True) -> None:
         self.done_text.setText(text)

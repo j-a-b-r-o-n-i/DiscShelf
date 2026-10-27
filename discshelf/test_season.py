@@ -393,6 +393,24 @@ def run():
         check(by(live, 4).target == "episode" and os.path.isfile(os.path.join(dest, old)), "undo from disc 1")
         check(library.last_log(ctl.fix_undo_dir()) is None, "an undone log is still offered")
 
+        # Deleting the French file takes its subtitles with it, and disc 1 records the title as skipped.
+        delete = nasfix.plan(p, "delete", naming.Scheme())
+        check(delete.moves == [] and delete.deletes == [old], f"delete: {delete.deletes}")
+        done = ctl.apply_nas_fix(live, delete, rescan=False)
+        names = sorted(os.listdir(sdir))
+        check(done.log == "" and "Kites and Things (2019) - S01E02 (2).mkv" not in names
+              and "Kites and Things (2019) - S01E02 (2).en.srt" not in names
+              and "Kites and Things (2019) - S01E02.mkv" in names, f"after the delete: {names}")
+        check(by(live, 4).target == "skip" and next(f for f in live.files if f.title_index == 4).dest_rel == "",
+              "disc 1's record of the deleted title")
+        st = ctl.season_status(live, refresh=True)
+        check(not [p for p in st.problems if p.kind == "nas"], "the deleted pair is still flagged")
+        try:
+            nasfix.delete_files(dest, [old])
+            check(False, "deleting a missing file didn't raise")
+        except library.RenameError:
+            pass
+
     for f in failures:
         print("FAIL:", f)
     print(f"season: {'ok' if not failures else f'{len(failures)} failure(s)'}")

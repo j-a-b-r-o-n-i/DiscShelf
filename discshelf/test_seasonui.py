@@ -147,7 +147,7 @@ def run():
                                     "Bluey (2018)/Season 01/Bluey (2018) - S01E20 - Markets - French.mkv")],
           f"changes: {v.options[0].changes}")
     check(m.compare.apply_btn.text() == "Rename 1 file" and m.compare.rescan.isVisibleTo(win), m.compare.apply_btn.text())
-    check({o.key for o in v.options} == {"version", "extra", "aside", "swap"}, f"options: {[o.key for o in v.options]}")
+    check({o.key for o in v.options} == {"version", "extra", "aside", "delete", "swap"}, f"options: {[o.key for o in v.options]}")
     root = ctl.fix_root(job)
     season_dir = os.path.join(root, "Bluey (2018)", "Season 01")
     m.compare.apply_btn.click()
