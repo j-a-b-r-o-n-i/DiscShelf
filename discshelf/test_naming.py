@@ -12,7 +12,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from discshelf.config import Config  # noqa: E402
 from discshelf.models import Episode, Job, Match, Stream, Title  # noqa: E402
-from discshelf.naming import (Scheme, clean, dedupe, double_title, episode_relpath, extra_relpath,  # noqa: E402
+from discshelf.naming import (Scheme, clean, dedupe, double_title, episode_relpath, existing_show_folder,  # noqa: E402
+                              extra_relpath,
                               movie_relpath, quality_label, relpath_for, safe_name, season_folder, show_folder)
 
 
@@ -120,6 +121,22 @@ def run():
     eq(episode_relpath("Alien: Romulus", None, 1, 1, title='What? A/B\x00: C', scheme=raw),
        "Alien: Romulus/Season 01/Alien: Romulus - S01E01 - What? AB: C.mkv")
     eq(clean("a/b\x00c", raw), "abc")
+
+    # A show that already has a folder in the destination: new rips join it.
+    names = ["Severance", "bluey (2018)", "The Office (2001)", "Other"]
+    eq(existing_show_folder(names, "Severance", 2022), "Severance")
+    eq(existing_show_folder(names, "Bluey", 2018), "bluey (2018)")
+    eq(existing_show_folder(names, "Bluey", None), "bluey (2018)")
+    eq(existing_show_folder(names, "The Office", 2005), None)       # another show of that name
+    eq(existing_show_folder(names, "Andor", 2022), None)
+    eq(existing_show_folder(["Alien - Romulus"], "Alien: Romulus", None), "Alien - Romulus")
+    eq(relpath_for(tv, Match(0, "episode", Episode(1, 3, "Half Loop")), "tv", show_dir="Severance"),
+       "Severance/Season 01/Severance - S01E03 - Half Loop.mkv")
+    eq(relpath_for(tv, Match(2, "extra", extra_name="Inside Lumon", extra_folder="Interviews"), "tv",
+                   show_dir="Severance"), "Severance/Interviews/Inside Lumon.mkv")
+    eq(episode_relpath("Star Trek", 1966, 1, 1, title="The Man Trap", show_dir="Star.Trek.S01.1080p",
+                       prefix="Star Trek (1966)"),
+       "Star.Trek.S01.1080p/Season 01/Star Trek (1966) - S01E01 - The Man Trap.mkv")
 
     # Films.
     ed, edq = Scheme(film="edition"), Scheme(film="edition_quality")

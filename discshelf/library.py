@@ -251,6 +251,7 @@ class Lookup:
     episodes: list[Episode] = field(default_factory=list)
     note: str = ""                # a sentence when the show couldn't be found or is ambiguous
     ambiguous: bool = False
+    release: bool = False         # the folder is a release name ("Show.S01.1080p.WEB"), not the show's
 
 
 def pick_show(hits: list, name: str, year: int | None):
@@ -293,7 +294,7 @@ def lookup(search: Callable[[str], list], episodes: Callable[[int, int | None], 
     # A folder Disc Shelf or Plex named keeps its own name; a release folder takes TVmaze's.
     picked = show_id is not None and _key(hit.name) != _key(name)
     out = Lookup(hit.name if release or sure == "loose" or picked else name,
-                 year if year and not picked else hit.year, hit.id, hits)
+                 year if year and not picked else hit.year, hit.id, hits, release=release)
     if sure == "several":
         out.ambiguous = True
         out.note = (f"{sum(_key(h.name) == _key(name) for h in hits)} shows on TVmaze are called “{name}”. "
@@ -452,8 +453,13 @@ def _len(seconds: int) -> str:
 
 def plan_show(scan: ShowScan, look: Lookup | None, scheme: naming.Scheme | None = None,
               fixes: dict[str, str] | None = None, readings: dict[str, Reading] | None = None,
-              records_root: str = "", root: str = "") -> ShowPlan:
+              records_root: str = "", root: str = "", rename_folder: bool = False) -> ShowPlan:
     """What would change in one show folder, and what needs a decision.
+
+    The show folder keeps its name unless rename_folder is set, because a new folder name
+    makes Plex match the whole show again and leaves a release folder's other files behind.
+    Its name then starts each file name too, except in a release folder, whose file names
+    take the show's name and year from TVmaze. Season folders and file names follow the scheme.
 
     fixes maps a duplicate's rel to "version" (the default), "extra" or "aside". readings
     come from readings_from_jobs, keyed under records_root (the destination's path as the
@@ -471,7 +477,9 @@ def plan_show(scan: ShowScan, look: Lookup | None, scheme: naming.Scheme | None 
     if look.note:
         plan.problems.append(Problem("show", look.note))
     eps = {(e.season, e.number): e for e in look.episodes}
-    folder = naming.show_folder(look.name, look.year, scheme)
+    named_folder = naming.show_folder(look.name, look.year, scheme)
+    folder = named_folder if rename_folder else scan.folder
+    prefix = folder if rename_folder or not look.release else named_folder
 
     def reading(f: LibFile) -> Reading | None:
         return readings.get(_norm_path(os.path.join(records_root, f.rel))) if records_root else None
@@ -540,7 +548,7 @@ def plan_show(scan: ShowScan, look: Lookup | None, scheme: naming.Scheme | None 
                 why = f"Follows the scheme · card reads “{r.text}”"
             if k == 0:
                 dst = naming.episode_relpath(look.name, look.year, season, number, f.end, version, ext, e.title,
-                                             end_t, f.quality, scheme)
+                                             end_t, f.quality, scheme, folder, prefix)
                 targets.append((f, dst, why, kind))
                 continue
             label = (r.version if r and r.version else "") or f"Version {k + 1}"
@@ -564,7 +572,7 @@ def plan_show(scan: ShowScan, look: Lookup | None, scheme: naming.Scheme | None 
                 plan.extra_files.append((f"{folder}/{SET_ASIDE}/{PLEXIGNORE[0]}", PLEXIGNORE[1]))
             else:
                 dst = naming.episode_relpath(look.name, look.year, season, number, f.end, label, ext, e.title,
-                                             end_t, f.quality, scheme)
+                                             end_t, f.quality, scheme, folder, prefix)
                 targets.append((f, dst, f"A second cut of {e.title}, kept as a version", "version"))
 
     # Two files may not end up with one name, and a file that stays may not be overwritten.

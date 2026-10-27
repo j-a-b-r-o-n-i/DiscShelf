@@ -4705,6 +4705,13 @@ class LibraryPage(QWidget):
         sc.lay.addLayout(hbox(self.scope_show, self.scope_all, None, spacing=20))
         self.scope_note = label("", "small", wrap=True)
         sc.lay.addWidget(self.scope_note)
+        self.rename_folders = QCheckBox()
+        self.rename_folders.toggled.connect(self.folders_toggled)
+        sc.lay.addWidget(Option(self.rename_folders, "Rename show folders too",
+                                "Show folders get the name from Settings → File names, for example “Bluey (2018)”. "
+                                "Plex then matches each renamed show again, and files that aren't videos stay in "
+                                "the old folder. Left off, each show keeps its folder and only what's inside it "
+                                "is renamed."))
         bl.addWidget(sc)
 
         ch = Card(margins=(0, 0, 0, 0), spacing=0)
@@ -4926,7 +4933,7 @@ class LibraryPage(QWidget):
         from . import library
         self.plans[folder] = library.plan_show(self.scans[folder], self.looks[folder], self.scheme(), self.fixes,
                                                self.readings, records_root=self.dest.path if self.dest else "",
-                                               root=self.root)
+                                               root=self.root, rename_folder=self.rename_folders.isChecked())
 
     def tvmaze_picked(self, i: int):
         sid = self.tvmaze.itemData(i)
@@ -5112,7 +5119,9 @@ class LibraryPage(QWidget):
         settings = naming.Scheme.from_config(self.win.cfg).episode
         for key, opt in self.scheme_opts.items():
             s = _dc_replace(base, episode=key)
-            path = naming.episode_relpath(show, year, season, 1, title=title, quality="1080p", scheme=s)
+            keep = not self.rename_folders.isChecked() and look is not None and not look.release
+            path = naming.episode_relpath(show, year, season, 1, title=title, quality="1080p", scheme=s,
+                                          show_dir=self.current if keep else "")
             opt.desc.setText(path.rsplit("/", 1)[-1])
             text = dict(self.EPISODE_SCHEMES)[key]
             opt.btn.setText(text + (" (default, set in Settings)" if key == settings else ""))
@@ -5141,6 +5150,13 @@ class LibraryPage(QWidget):
         from . import naming
         key = btn.property("key")
         self.episode_scheme = None if key == naming.Scheme.from_config(self.win.cfg).episode else key
+        for folder in list(self.plans):
+            self.replan(folder)
+        self.fill_list()
+        self.render()
+
+    def folders_toggled(self, _on: bool):
+        self.result = ""
         for folder in list(self.plans):
             self.replan(folder)
         self.fill_list()

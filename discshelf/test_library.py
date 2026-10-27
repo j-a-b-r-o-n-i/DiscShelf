@@ -163,6 +163,25 @@ def run():
         eq({r.src: r.dst for r in bare.renames}[f"{s1} - S01E02 - Hospital.mkv"],
            f"{SHOW}/Season 1/{SHOW} - S01E02.mkv", "code-only scheme")
 
+        # A folder named without the year keeps its name unless show folders are renamed too.
+        os.rename(os.path.join(root, SHOW), os.path.join(root, "Bluey"))
+        plain = L.plan_show(L.scan_show(root, "Bluey"), L.lookup(search, episodes, "Bluey"), Scheme(), root=root)
+        eq({r.src: r.dst for r in plain.renames}["Bluey/Season 01/Bluey (2018) - S01E01.mkv"],
+           "Bluey/Season 01/Bluey - S01E01 - Magic Xylophone.mkv", "kept folder")
+        check(all(r.dst.startswith("Bluey/") for r in plain.renames), "a file left the show folder")
+        moved = L.plan_show(L.scan_show(root, "Bluey"), L.lookup(search, episodes, "Bluey"), Scheme(), root=root,
+                            rename_folder=True)
+        eq({r.src: r.dst for r in moved.renames}["Bluey/Season 01/Bluey (2018) - S01E01.mkv"],
+           f"{s1} - S01E01 - Magic Xylophone.mkv", "renamed folder")
+        os.rename(os.path.join(root, "Bluey"), os.path.join(root, SHOW))
+        # A release folder keeps its name, and its files take the show's name from TVmaze.
+        rel = "Bluey.S01.720p.WEB"
+        os.makedirs(os.path.join(root, rel, "extra"))
+        open(os.path.join(root, rel, "extra", "Bluey.S01E02.720p.WEB.mkv"), "wb").close()
+        rplan = L.plan_show(L.scan_show(root, rel), L.lookup(search, episodes, rel), Scheme(), root=root)
+        eq([r.dst for r in rplan.renames], [f"{rel}/Season 01/{SHOW} - S01E02 - Hospital.mkv"], "release folder")
+        shutil.rmtree(os.path.join(root, rel))
+
         # Rename, then undo: every name comes back, and nothing else changes.
         before = listing(root)
         log = L.apply(root, L.moves_of(aside.renames), undo_dir, "test", aside.extra_files)

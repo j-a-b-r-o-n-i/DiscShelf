@@ -108,6 +108,10 @@ by the show folder, the season and the `S01E01` code, and ignores the rest of th
 - **Characters a Windows share can't store** are replaced by default: a colon becomes
   " - ", and `? * " < > |` are removed. Turned off, only `/` is removed.
 
+A show that already has a folder in the destination keeps it: a new rip of "Bluey" goes
+into an existing `Bluey` or `bluey (2018)` folder, named `Bluey - S01E01 - …` to match,
+rather than starting a second `Bluey (2018)` folder.
+
 Two titles matched to the same episode with no version get " (2)" added to the second
 name, so neither is overwritten. That's rare now that versions are named.
 
@@ -132,6 +136,11 @@ file-name scheme. Films aren't checked yet.
 - **Two files of one episode**: keep the second as another version (the default), move it
   to the show's `Featurettes` folder as an extra, or set it aside in a `Set aside` folder in
   the show's folder, with a `.plexignore` so Plex skips it. Nothing is deleted.
+- **Show folders keep their names** unless you tick "Rename show folders too", because a
+  new folder name makes Plex match the whole show again and leaves files that aren't
+  videos behind. The folder's name starts each file name inside it; a release folder's
+  files take the show's name and year from TVmaze instead. Season folders and file names
+  always follow the scheme.
 - **What changes** lists every old name and its new one. The scheme can be changed for one
   rename without changing Settings, and the rename can cover one show or every show in the
   destination. Shows whose TVmaze match needs a decision wait.

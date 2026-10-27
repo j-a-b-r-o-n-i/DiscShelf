@@ -118,15 +118,34 @@ def _ver(version: str, scheme: Scheme | None = None) -> str:
     return f" - {v}" if v else ""
 
 
+def existing_show_folder(names: list[str], show: str, year: int | None,
+                         scheme: Scheme | None = None) -> str | None:
+    """The folder among names (a destination's listing) that already holds this show, so a new
+    rip joins it instead of starting a second folder. It matches the show's name without
+    regard to case, bare or with the show's year; a show with no year known also matches
+    "Name (any year)". None when there's no such folder."""
+    bases = {clean(show, scheme).casefold(), safe_name(show).casefold()} - {""}
+    for n in names:
+        f = n.casefold().strip()
+        if f in bases:
+            return n
+        m = re.fullmatch(r"(.+?) \((\d{4})\)", f)
+        if m and m.group(1) in bases and (year is None or int(m.group(2)) == year):
+            return n
+    return None
+
+
 def episode_relpath(show: str, year: int | None, season: int, number: int, episode_end: int | None = None,
                     version: str = "", ext: str = "mkv", title: str = "", end_title: str = "",
-                    quality: str = "", scheme: Scheme | None = None) -> str:
+                    quality: str = "", scheme: Scheme | None = None, show_dir: str = "", prefix: str = "") -> str:
     """Show (Year)/Season 01/Show (Year) - S01E01 - Episode name - Version [1080p].ext
 
     The episode name is left out when it isn't known, and the quality when it isn't known
-    or the scheme has no quality. A version equal to the quality tag isn't repeated."""
+    or the scheme has no quality. A version equal to the quality tag isn't repeated.
+    show_dir puts the file in a show folder that already exists instead of the scheme's,
+    and its name starts the file name too unless prefix says otherwise."""
     scheme = scheme or DEFAULT
-    folder = show_folder(show, year, scheme)
+    folder = show_dir or show_folder(show, year, scheme)
     code = f"S{season:02d}E{number:02d}"
     double = episode_end is not None and episode_end != number
     if double:
@@ -137,7 +156,7 @@ def episode_relpath(show: str, year: int | None, season: int, number: int, episo
     tag = quality if scheme.episode == "name_quality" and quality else ""
     if tag and version.strip().casefold() == tag.casefold():
         version = ""
-    stem = f"{folder} - {code}" + (f" - {name}" if name else "") + _ver(version, scheme) + (f" [{tag}]" if tag else "")
+    stem = f"{prefix or folder} - {code}" + (f" - {name}" if name else "") + _ver(version, scheme) + (f" [{tag}]" if tag else "")
     return f"{folder}/{season_folder(season, scheme)}/{stem}.{ext}"
 
 
@@ -171,12 +190,15 @@ def extra_relpath(show_or_movie_folder: str, name: str, folder: str = "Featurett
     return f"{show_or_movie_folder}/{folder}/{stem}.{ext}"
 
 
-def relpath_for(job: Job, match: Match, layout: str, scheme: Scheme | None = None, end_title: str = "") -> str | None:
+def relpath_for(job: Job, match: Match, layout: str, scheme: Scheme | None = None, end_title: str = "",
+                show_dir: str = "") -> str | None:
     """The path under the destination folder for one match, or None when the title is skipped.
 
     layout is a Destination.layout: "tv" or "movie". end_title is the second episode's name
-    for a title that holds two; without it the file is named after the first. Raises
-    ValueError when the job lacks what the name needs (no show name, or no season for an episode).
+    for a title that holds two; without it the file is named after the first. show_dir is
+    the show's folder when the destination already has one (existing_show_folder); episodes
+    and extras then go there. Raises ValueError when the job lacks what the name needs (no
+    show name, or no season for an episode).
     """
     scheme = scheme or DEFAULT
     if match.target == "skip":
@@ -184,8 +206,8 @@ def relpath_for(job: Job, match: Match, layout: str, scheme: Scheme | None = Non
     if not job.show.strip():
         raise ValueError("The job has no show or film name yet.")
     if match.target == "extra":
-        return extra_relpath(show_folder(job.show, job.year, scheme), match.extra_name, match.extra_folder,
-                             scheme=scheme)
+        folder = show_dir if show_dir and layout != "movie" else show_folder(job.show, job.year, scheme)
+        return extra_relpath(folder, match.extra_name, match.extra_folder, scheme=scheme)
     quality = title_quality(job, match.title_index)
     if layout == "movie" or match.target == "feature":
         return movie_relpath(job.show, job.year, job.version, edition=match.version, quality=quality, scheme=scheme)
@@ -197,7 +219,7 @@ def relpath_for(job: Job, match: Match, layout: str, scheme: Scheme | None = Non
             raise ValueError("The job has no season number.")
         return episode_relpath(job.show, job.year, season, match.episode.number, match.episode_end,
                                match.version or job.version, title=match.episode.title, end_title=end_title,
-                               quality=quality, scheme=scheme)
+                               quality=quality, scheme=scheme, show_dir=show_dir)
     raise ValueError(f"Unknown match target {match.target!r}.")
 
 

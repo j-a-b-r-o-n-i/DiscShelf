@@ -104,6 +104,14 @@ def run():
             check(eps == [1, 2, 3], f"disc 1 episodes: {eps}")
             files = ctl.plan_paths(job)
             check(files[0].dest_rel == "Test Show/Season 01/Test Show - S01E01 - Episode 1.mkv", f"path: {files[0].dest_rel}")
+            # The destination already has a folder for the show under another spelling: new rips join it.
+            os.makedirs(os.path.join(nas, "test show (2021)"))
+            job.year = 2021
+            prev = [p for _ti, p in ctl.preview_paths(job)]
+            check(prev[:1] == ["test show (2021)/Season 01/test show (2021) - S01E01 - Episode 1.mkv"],
+                  f"existing folder: {prev[:1]}")
+            os.rmdir(os.path.join(nas, "test show (2021)"))
+            job.year = None
 
             ctl.copy(job, lambda f, t: None, threading.Event())
             check(job.stage == "done" and all(f.state == "verified" for f in job.files), f"after copy: {job.stage}")
