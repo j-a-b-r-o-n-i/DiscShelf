@@ -5,11 +5,13 @@ runs the helper when it can import RapidOCR (the Flatpak), and is preferred to t
 RapidOCR venv is used when it is there and run once for a whole batch at low priority, tesseract's words
 become lines with boxes (and two columns run together are split again), tesseract takes
 over when the venv is missing or broken, and with no engine the error is a plain sentence.
+A Session keeps one helper running for many batches, and says why when it stops.
 
 Run:  python3 discshelf/test_ocr.py    (also works under pytest)
 """
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
@@ -189,10 +191,78 @@ def run():
     finally:
         env.close()
 
+    failures += _test_session()
+
     for f in failures:
         print("FAIL:", f)
     print(f"ocr: {'ok' if not failures else f'{len(failures)} failure(s)'}")
     return 1 if failures else 0
+
+
+class ServeProc:
+    """ocr_helper.py --serve: answers each line of paths with one line of JSON. die_after
+    batches in, it exits with an error on stderr instead."""
+
+    def __init__(self, cmd, stderr, die_after=None, **kw):
+        self.cmd, self.err, self.die_after = cmd, stderr, die_after
+        self.out: queue.Queue = queue.Queue()
+        self.batches = []
+        self.stdout = iter(self.out.get, None)
+        proc = self
+
+        class Stdin:
+            def write(self, line):
+                paths = json.loads(line)
+                proc.batches.append(paths)
+                if proc.die_after is not None and len(proc.batches) > proc.die_after:
+                    proc.err.write("Traceback ...\nMemoryError: out of memory\n")
+                    proc.err.flush()
+                    proc.out.put(None)
+                    return
+                proc.out.put("onnxruntime says hello\n")      # a library printing to stdout
+                proc.out.put(json.dumps([[[os.path.basename(p), 0.9, 1, 2, 3, 4]] for p in paths]) + "\n")
+
+            def flush(self):
+                pass
+
+            def close(self):
+                proc.out.put(None)
+
+        self.stdin = Stdin()
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def _test_session():
+    failures = []
+    env = Env(venv=True, tesseract=False)
+    try:
+        started = []
+
+        def popen(cmd, **kw):
+            started.append(ServeProc(cmd, **kw))
+            return started[-1]
+        with ocr.Session(popen=popen) as s:
+            got = [s.read([f"/f/{i}.png", f"/f/{i}b.png"]) for i in range(3)]
+        if len(started) != 1 or started[0].cmd[-2:] != [ocr.HELPER, "--serve"] or len(started[0].batches) != 3:
+            failures.append(f"session: one helper for three batches: {[p.cmd for p in started]}")
+        if got[2] != [[OcrLine("2.png", 0.9, 1, 2, 3, 4)], [OcrLine("2b.png", 0.9, 1, 2, 3, 4)]]:
+            failures.append(f"session lines: {got[2]}")
+
+        def dying(cmd, **kw):
+            return ServeProc(cmd, die_after=1, **kw)
+        with ocr.Session(popen=dying) as s:
+            s.read(["/f/a.png"])
+            try:
+                s.read(["/f/b.png"])
+                failures.append("session: a helper that stops raises")
+            except OcrError as e:
+                if "MemoryError" not in str(e):
+                    failures.append(f"session: the error says why: {e}")
+    finally:
+        env.close()
+    return failures
 
 
 def test_ocr():

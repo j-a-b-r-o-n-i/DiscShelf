@@ -8,9 +8,10 @@
 #
 # What it does:
 #   packages   Arch/CachyOS: mkvtoolnix-cli rsync ffmpeg pyside6 ttf-ibm-plex tesseract
-#              tesseract-data-eng from the repos and makemkv from the AUR (paru or yay).
-#              Fedora: mkvtoolnix rsync ffmpeg-free python3-pyside6 tesseract
-#              tesseract-langpack-eng and the IBM Plex fonts with dnf, and MakeMKV as the
+#              tesseract-data-eng chromaprint from the repos and makemkv from the AUR (paru
+#              or yay). Fedora: mkvtoolnix rsync ffmpeg-free python3-pyside6 tesseract
+#              tesseract-langpack-eng chromaprint-tools and the IBM Plex fonts with dnf,
+#              and MakeMKV as the
 #              Flathub app com.makemkv.MakeMKV (the config is pointed at it).
 #   OCR venv   ~/.local/share/disc-shelf/ocr with rapidocr_onnxruntime 1.2.3, for
 #              reading episode lists off case photos. The app's own Python can't import it,
@@ -70,7 +71,8 @@ fi
 if [ -z "${SKIP_PACKAGES:-}" ]; then
   if command -v pacman >/dev/null; then
     say "Installing packages with pacman (asks for your password)"
-    sudo pacman -S --needed --noconfirm mkvtoolnix-cli rsync ffmpeg pyside6 ttf-ibm-plex tesseract tesseract-data-eng
+    sudo pacman -S --needed --noconfirm mkvtoolnix-cli rsync ffmpeg pyside6 ttf-ibm-plex tesseract tesseract-data-eng \
+      chromaprint
     if ! command -v makemkvcon >/dev/null; then
       aur="$(command -v paru || command -v yay || true)"
       if [ -n "$aur" ]; then
@@ -83,7 +85,7 @@ if [ -z "${SKIP_PACKAGES:-}" ]; then
   elif command -v dnf >/dev/null; then
     say "Installing packages with dnf (asks for your password)"
     sudo dnf install -y mkvtoolnix rsync ffmpeg-free python3-pyside6 tesseract tesseract-langpack-eng \
-      ibm-plex-sans-fonts ibm-plex-mono-fonts flatpak
+      chromaprint-tools ibm-plex-sans-fonts ibm-plex-mono-fonts flatpak
     if ! command -v makemkvcon >/dev/null; then
       say "Installing MakeMKV from Flathub"
       flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
@@ -91,7 +93,7 @@ if [ -z "${SKIP_PACKAGES:-}" ]; then
       makemkv_cmd='["flatpak", "run", "--command=makemkvcon", "com.makemkv.MakeMKV"]'
     fi
   else
-    say "Unknown distribution: install MakeMKV, mkvtoolnix, rsync, ffmpeg, PySide6 and tesseract yourself."
+    say "Unknown distribution: install MakeMKV, mkvtoolnix, rsync, ffmpeg, PySide6, tesseract and chromaprint yourself."
   fi
 fi
 
@@ -149,6 +151,8 @@ if command -v dovi_tool >/dev/null || [ -x "$bin/dovi_tool" ]; then say "  ok   
 else say "  missing dovi_tool (only needed for Dolby Vision conversions)"; fi
 if command -v tesseract >/dev/null && tesseract --list-langs 2>/dev/null | grep -qx eng; then say "  ok      tesseract (English)"
 else say "  missing tesseract with English data (the fallback for reading case photos)"; fi
+if command -v fpcalc >/dev/null; then say "  ok      fpcalc"
+else say "  missing fpcalc from chromaprint (title cards are then read from each title's start, which is slower)"; fi
 if rapidocr_ok; then say "  ok      RapidOCR in $ocr_venv"
 else say "  missing RapidOCR in $ocr_venv (reading case photos falls back to tesseract)"; fi
 if python3 -c 'import PySide6' 2>/dev/null; then say "  ok      PySide6"; else say "  MISSING PySide6"; missing=1; fi

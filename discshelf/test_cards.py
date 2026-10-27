@@ -11,6 +11,7 @@ title it's given and then lets the title go.
 Run:  python3 discshelf/test_cards.py    (also works under pytest)
 """
 import os
+import random
 import sys
 import tempfile
 import threading
@@ -21,6 +22,8 @@ from discshelf.config import Config  # noqa: E402
 from discshelf.jobs import JobStore  # noqa: E402
 from discshelf.models import Episode, Job, Match, Title  # noqa: E402
 from discshelf.test_titlecard import load  # noqa: E402
+from discshelf.theme import ThemeBook  # noqa: E402
+from discshelf.titlecard import TitleReading  # noqa: E402
 
 NO_DISCDB = b'{"data": {"mediaItems": {"nodes": []}}}'
 
@@ -44,7 +47,7 @@ def run():
             failures.append(msg)
 
     episodes, readings, truth = load()
-    saved = (titlecard.read_title, ocr.engine)
+    saved = (titlecard.scan_title, ocr.engine)
     with tempfile.TemporaryDirectory() as root:
         try:
             ctl = pipeline.Controller(Config(), JobStore(os.path.join(root, "jobs")), tvmaze=CartoonTvMaze(episodes),
@@ -85,7 +88,7 @@ def run():
             check(ctl._ready(r, 3, close_guess), "a title with no card pending waited")
 
             # The reader thread: reads what it's given, then lets the title go.
-            titlecard.read_title = lambda path, **kw: readings[int(path)]
+            titlecard.scan_title = lambda path, episodes, **kw: readings[int(path)]
             ocr.engine = lambda: "rapidocr"
             job2 = Job(id="cards2", disc_label="X", titles=titles, show="Adventure Time", show_id=290,
                        media_kind="tv", stage="rip", matches=[guess(t.index) for t in titles])
@@ -97,13 +100,43 @@ def run():
             check(not r2.card_pending and sorted(ctl._cards[job2.id]) == [1, 2, 3],
                   f"reader: pending {r2.card_pending}, read {sorted(ctl._cards.get(job2.id, {}))}")
 
+            # The reader gets the setting's limit, the show's episodes and its themes.
+            seen = []
+
+            def fake_scan(path, episodes, **kw):
+                seen.append((path, len(episodes), kw))
+                return readings[int(path)] if path.isdigit() else TitleReading(path=path)
+            titlecard.scan_title = fake_scan
+            ctl.cfg.card_search_minutes = 10
+            ctl._read_one(job2, 1, "1")
+            path, n_eps, kw = seen[-1]
+            check(kw["limit_s"] == 600 and kw["fpcalc"] == "fpcalc" and n_eps == len(episodes)
+                  and os.path.basename(kw["themes"].path) == "290.json", f"reader arguments: {n_eps} {kw}")
+            # A title read from the start before the theme was learned, which stopped during
+            # the theme, is read again once a later title has learned it.
+            rng = random.Random(5)
+            song = [rng.getrandbits(32) for _ in range(250)]
+            noise = lambda n: [rng.getrandbits(32) for _ in range(n)]  # noqa: E731
+            fp = lambda at: noise(at) + song + noise(2000)  # noqa: E731
+            book = ThemeBook("x", os.path.join(root, "themes"))
+            book.place_or_learn(fp(10))
+            book.place_or_learn(fp(300))
+            ctl._themes = lambda job: book
+            first = TitleReading(path="/rips/first.mkv", fingerprint=fp(40), card_t=10.0)
+            ctl._cards[job2.id] = {5: first}
+            seen.clear()
+            ctl._read_one(job2, 6, "/rips/second.mkv")
+            check([p for p, _, _ in seen] == ["/rips/second.mkv", "/rips/first.mkv"]
+                  and ctl._cards[job2.id][5] is not first, f"read again: {[p for p, _, _ in seen]}")
+            ctl.cfg.card_search_minutes = 5
+
             # Title cards are off for films, and when the setting is off.
             ctl.cfg.read_title_cards = False
             r3 = pipeline._Run(job2, "per_title", threading.Event(), 1.0, None, lambda f, t: None)
             ctl._card_queue(r3, 4, "4")
             check(r3.cards_thread is None and not r3.card_pending, "cards were read with the setting off")
         finally:
-            titlecard.read_title, ocr.engine = saved
+            titlecard.scan_title, ocr.engine = saved
 
     for f in failures:
         print("FAIL:", f)

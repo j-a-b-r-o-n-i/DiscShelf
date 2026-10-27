@@ -48,9 +48,19 @@ source never replaces an earlier one, a match you picked, or one you confirmed.
    are tied to TVmaze by name, because TheDiscDB numbers them the way TMDB does. Coverage
    is still small, so most discs fall through to the next two sources.
 3. **Title cards.** With "Read title cards to match episodes" on (Settings → Matching),
-   the first 90 seconds of each title are read with OCR as soon as it's ripped. Text that
-   appears on several titles, such as a theme song's captions, is ignored. A running-time
-   guess waits for its title's card before it's copied. For a disc ripped earlier,
+   each title is read with OCR as soon as it's ripped. Chromaprint's fpcalc fingerprints
+   the opening's sound, and the theme song is found by comparing two titles of the show:
+   the longest stretch that sounds the same in both. Reading then starts where the theme
+   ends, one small grey frame every 2 seconds, and stops at the first frame that names one
+   of the show's episodes, once the frames around it, read again in full-size colour,
+   agree. It reads up to "Look for the title card up to" (5 minutes unless changed), so a
+   card after a long opening scene is found too. Each version of a show's theme is kept,
+   so a special or a season with a new theme song is learned as well. A title whose theme
+   isn't recognised is read from its start, and when nothing is found after the theme the
+   skipped part is read too, so the theme only ever saves time. Text that appears on
+   several titles, such as a logo, is ignored, as is text during the theme song unless
+   there is nothing else. A running-time guess waits for its title's card before it's
+   copied. For a disc ripped earlier,
    **Read title cards** on the Match page reads them from the files, several titles at
    once. A bar shows each title's progress, and the **Title card** column shows exactly
    what each card read.

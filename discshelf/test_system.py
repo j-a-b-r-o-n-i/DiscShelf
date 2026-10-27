@@ -27,7 +27,8 @@ class FakeHost(system.Host):
     `answer`, which returns (exit code, stdout, stderr) or None for "not installed"."""
 
     def __init__(self, sandboxed=False, host_progs=("makemkvcon", "flatpak", "pkexec"),
-                 tools=("ffmpeg", "ffprobe", "mkvmerge", "rsync", "dovi_tool", "tesseract", "flatpak", "xdg-open"),
+                 tools=("ffmpeg", "ffprobe", "mkvmerge", "rsync", "dovi_tool", "tesseract", "fpcalc", "flatpak",
+                        "xdg-open"),
                  paths=("/dev/sr0", "/sys/block/sr0/device/scsi_generic/sg3", "/dev/sg3", "/dev/nvidia0"),
                  noaccess=(), files=None, answer=None):
         self.sandboxed, self.home = sandboxed, HOME
@@ -134,7 +135,8 @@ def run():
         eq(got[0].detail, "MakeMKV 1.18.1 is installed from Flathub.", "MakeMKV detail")
         check("beta key" in got[1].detail, f"beta key detail: {got[1].detail}")
         eq(got[2].detail, "Found 1 optical drive (/dev/sr0).", "drive detail")
-        eq(got[4].detail, "ffmpeg, ffprobe, mkvmerge, rsync, dovi_tool and tesseract are available.", "tools detail")
+        eq(got[4].detail, "ffmpeg, ffprobe, mkvmerge, rsync, dovi_tool, tesseract and fpcalc are available.",
+           "tools detail")
         check("much faster" in got[6].detail, f"gpu detail: {got[6].detail}")
         eq(started_makemkvcon(h.calls), [], "checks never start makemkvcon")
         check(not any("pkexec" in c or "install" in c for c in h.calls), f"checks changed something: {h.calls}")
@@ -179,7 +181,8 @@ def run():
         # --- tools
         got = {c.key: c for c in system.checks(cfg, FakeHost(tools=("ffmpeg", "ffprobe", "mkvmerge", "rsync")))}
         eq(got["tools"].ok, True, "optional tools missing is still ok")
-        check("dovi_tool and tesseract are missing" in got["tools"].detail, f"optional note: {got['tools'].detail}")
+        check("dovi_tool, tesseract and fpcalc are missing" in got["tools"].detail,
+              f"optional note: {got['tools'].detail}")
         got = {c.key: c for c in system.checks(cfg, FakeHost(sandboxed=True, tools=("ffmpeg",)))}
         eq(got["tools"].ok, False, "required tool missing")
         check(got["tools"].detail.startswith("ffprobe, mkvmerge and rsync are not") and "Reinstall" in got["tools"].fix,

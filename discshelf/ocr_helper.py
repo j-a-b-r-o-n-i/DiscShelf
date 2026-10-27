@@ -4,10 +4,16 @@ app's own Python when it can import rapidocr_onnxruntime (the Flatpak, a pip ins
 with the private OCR venv's Python otherwise.
 
     <python> -I discshelf/ocr_helper.py a.jpg b.png
+    <python> -I discshelf/ocr_helper.py --serve
 
 Prints one JSON list per image, in argument order, each a list of
 [text, confidence, x, y, w, h] with the box in pixels from the top-left corner.
 An image that cannot be read gives an empty list. Nothing from discshelf is imported.
+
+With --serve it loads the models once and reads batches until stdin closes: each line in
+is a JSON list of image paths, each line out the JSON for that batch. The title card
+reader sends a few frames at a time and stops at the card, so this saves it a model load
+per batch.
 """
 import json
 import sys
@@ -34,12 +40,7 @@ def _quiet_threads() -> None:
         pass
 
 
-def main(paths: list[str]) -> int:
-    _quiet_threads()
-    from rapidocr_onnxruntime import RapidOCR
-
-    # One engine for the whole batch: loading the models takes about a second.
-    engine = RapidOCR()
+def _read(engine, paths: list[str]) -> list:
     out = []
     for path in paths:
         lines = []
@@ -54,7 +55,21 @@ def main(paths: list[str]) -> int:
             x, y = int(min(xs)), int(min(ys))
             lines.append([text, round(float(score), 3), x, y, int(max(xs)) - x, int(max(ys)) - y])
         out.append(lines)
-    json.dump(out, sys.stdout)
+    return out
+
+
+def main(paths: list[str]) -> int:
+    _quiet_threads()
+    from rapidocr_onnxruntime import RapidOCR
+
+    # One engine for the whole batch: loading the models takes about a second.
+    engine = RapidOCR()
+    if paths == ["--serve"]:
+        for line in sys.stdin:
+            if line.strip():
+                print(json.dumps(_read(engine, json.loads(line))), flush=True)
+        return 0
+    json.dump(_read(engine, paths), sys.stdout)
     return 0
 
 

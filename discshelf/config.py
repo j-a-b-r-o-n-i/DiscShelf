@@ -94,6 +94,7 @@ class Config:
     mkvmerge: str = "mkvmerge"
     ffprobe: str = "ffprobe"
     ffmpeg: str = "ffmpeg"
+    fpcalc: str = "fpcalc"       # Chromaprint, to skip a show's theme song when reading title cards
 
     def destination(self, kind: str) -> Destination | None:
         return next((d for d in self.destinations if d.kind == kind), None)

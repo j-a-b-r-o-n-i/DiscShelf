@@ -237,6 +237,13 @@ def run():
     win.settings.save()
     saved = ctl.saved_config
     check(saved is not None and not saved.copy_as_ripped and not saved.stream_films, "the Copying settings weren't saved")
+    # How far to look for a title card: 5 minutes unless changed.
+    cm = win.settings.card_minutes
+    check(cm.currentData() == 5 and [cm.itemData(i) for i in range(cm.count())] == [2, 5, 10, 20],
+          f"title card limit choices: {cm.currentData()}")
+    cm.setCurrentIndex(cm.findData(10))
+    win.settings.save()
+    check(ctl.saved_config.card_search_minutes == 10, "the title card limit wasn't saved")
 
     # A volume disc that mixes seasons: the list from the case matches it, and the picker lists every season.
     from types import SimpleNamespace
