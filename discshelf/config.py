@@ -71,6 +71,13 @@ class Config:
     copy_as_ripped: bool = True  # copy each title to the NAS as soon as it's ripped and its match is ready
     stream_films: bool = True    # copy a film while it rips (needs RAW HDR and MakeMKV choosing the languages)
     read_title_cards: bool = True    # read each episode's on-screen title card to match it (needs OCR)
+    card_search_minutes: int = 5     # how far into a title to look for its card: 2 | 5 | 10 | 20
+    # File names (naming.Scheme). The defaults are Plex's own examples.
+    name_episode: str = "name"   # "name": S01E01 - Episode name | "code": S01E01 | "name_quality": … [1080p]
+    name_show_year: bool = True  # "Bluey (2018)" rather than "Bluey"
+    name_season_pad: bool = True # "Season 01" rather than "Season 1"
+    name_film: str = "year"      # "year": Aliens (1986) | "edition": … {edition-…} | "edition_quality": … [2160p]
+    name_safe_chars: bool = True # replace characters a Windows share can't store (":" becomes " -")
     eject_after_rip: bool = True     # open the tray once a rip finishes without an error, ready for the next disc
     # The AV1 second version of a 4K disc (av1.py), made after the remux is on the NAS:
     av1_enabled: bool = True     # make one for every 4K disc; a disc can override it (Job.av1)

@@ -117,6 +117,8 @@ class Match:
     note: str = ""               # why it needs checking, in a sentence
     confirmed: bool = False      # the user confirmed it; "close" matches don't need this to be copied
     source: str = ""             # what made it: "runtime" | "card" | "discdb" | "list" | "manual"; "" = older jobs
+    version: str = ""            # a second cut of an episode another title also holds, e.g. "Short cut";
+                                 # both files keep the episode's name and Plex offers them under Play Version
 
     @property
     def ready(self) -> bool:
