@@ -96,20 +96,26 @@ Each title involved is marked "check" with a sentence naming the other ("Title 2
 S01E20 “Markets”."), and it isn't copied, even during a rip, until the problem is settled.
 A title already on the NAS keeps its match. The red box at the top of the Match page lists
 each problem; **Compare** shows the titles side by side with their length, playlist, size,
-what their title cards read and where they are now, and offers:
+what their audio languages are, what their title cards read and where they are now, and offers:
 
 - **This is …**: the title keeps the episode, and the other is skipped until you pick its
   episode.
-- **Keep as a second version**: both keep the episode, and this file gets " - Short cut"
-  (when it's more than 5 seconds shorter) or " - Version 2" in its name, so Plex offers the
-  two under Play Version.
-- **Save as an extra**: it goes to `Featurettes` as "<episode> (short cut)".
+- **Keep as a second version**: both keep the episode, and this file gets its language
+  (" - French", when it has no audio in the disc's main language and the other title does),
+  " - Short cut" (when it's more than 5 seconds shorter) or " - Version 2" in its name, so
+  Plex offers the two under Play Version. For a dub the button reads **Keep as the French
+  version**.
+- **Save as an extra**: it goes to `Featurettes` as "<episode> (French)" or
+  "<episode> (short cut)".
 - **Pick another episode** opens the title's picker.
 
 **Read both title cards** reads just those titles. A card is judged on its own here,
 since two titles showing the same name would otherwise be taken for the show's own text.
-When both read the same name and one is shorter, the panel says the shorter one is
-probably a second cut.
+When one title has no audio in the disc's main language, the panel says it's probably the
+episode dubbed in that language; some discs carry a dubbed copy of one episode as a bonus.
+Otherwise, when both read the same name and one is shorter, it says the shorter one is
+probably a second cut. The disc's main language is the first audio language you keep, or
+else the one most titles play first.
 
 **The season grid** below the matches has a cell per episode of the season: on this disc
 (T and the title number), on another disc (D and its number), in the library (Lib), on more

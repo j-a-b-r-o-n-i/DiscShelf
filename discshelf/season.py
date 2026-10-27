@@ -15,7 +15,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from .models import Episode, Job, Match
+from .models import Episode, Job, Match, Title
 
 VIDEO_EXT = (".mkv", ".mp4", ".m4v", ".avi", ".ts", ".m2ts", ".webm", ".mov")
 SHORT_CUT_S = 5              # a title this much shorter than the other is called a short cut
@@ -416,6 +416,48 @@ def _length(job: Job, ti: int) -> int:
     return t.duration_s if t else 0
 
 
+LANG_NAMES = {"eng": "English", "fra": "French", "fre": "French", "spa": "Spanish", "deu": "German",
+              "ger": "German", "ita": "Italian", "jpn": "Japanese", "por": "Portuguese", "nld": "Dutch",
+              "dut": "Dutch", "kor": "Korean", "zho": "Chinese", "chi": "Chinese", "swe": "Swedish",
+              "dan": "Danish", "nor": "Norwegian", "fin": "Finnish", "pol": "Polish", "rus": "Russian"}
+
+
+def audio_langs(t: Title | None) -> list[str]:
+    """The title's audio languages as ISO 639-2 codes, in stream order, each once."""
+    out: list[str] = []
+    for st in t.streams if t else []:
+        if st.kind == "audio" and st.lang and st.lang not in out:
+            out.append(st.lang)
+    return out
+
+
+def lang_name(code: str, t: Title | None = None) -> str:
+    st = next((st for st in (t.streams if t else []) if st.kind == "audio" and st.lang == code and st.lang_name), None)
+    return LANG_NAMES.get(code) or (st.lang_name if st else "") or code.upper()
+
+
+def main_lang(job: Job) -> str:
+    """The disc's own language: the first audio language you keep, else the one most titles play first."""
+    if job.audio_langs:
+        return job.audio_langs[0]
+    count = collections.Counter(audio_langs(t)[0] for t in job.titles if audio_langs(t))
+    return count.most_common(1)[0][0] if count else ""
+
+
+def dub_of(mine: Title | None, others: list[Title | None], main: str) -> str:
+    """The language this title is dubbed in, e.g. "French", when it has no audio in the disc's main
+    language and another title holding the same episode does. "" otherwise."""
+    langs = audio_langs(mine)
+    if not main or not langs or main in langs or not any(main in audio_langs(o) for o in others):
+        return ""
+    return lang_name(langs[0], mine)
+
+
+def dub_language(job: Job, ti: int, problem: Problem) -> str:
+    titles = {t.index: t for t in job.titles}
+    return dub_of(titles.get(ti), [titles.get(o) for o in problem.titles if o != ti], main_lang(job))
+
+
 def is_short_cut(job: Job, ti: int, problem: Problem) -> bool:
     """This title is more than a few seconds shorter than every other title it clashes with."""
     mine = _length(job, ti)
@@ -425,7 +467,11 @@ def is_short_cut(job: Job, ti: int, problem: Problem) -> bool:
 
 
 def version_name(job: Job, ti: int, problem: Problem) -> str:
-    """"Short cut" for a shorter title, else "Version 2" (or the next number not in use)."""
+    """The dub's language ("French") for a title whose audio is all in another language, "Short cut"
+    for a shorter title, else "Version 2" (or the next number not in use)."""
+    dub = dub_language(job, ti, problem)
+    if dub:
+        return dub
     if is_short_cut(job, ti, problem):
         return "Short cut"
     used = {m.version for m in job.matches if m.version} | {o.version for o in problem.others if o.version}
@@ -469,6 +515,9 @@ def fix_version(matches: list[Match], job: Job, ti: int, problem: Problem) -> li
 
 def extra_name(job: Job, ti: int, problem: Problem) -> str:
     name = problem.name or problem.code
+    dub = dub_language(job, ti, problem)
+    if dub:
+        return f"{name} ({dub})"
     return f"{name} (short cut)" if is_short_cut(job, ti, problem) else f"{name} (another version)"
 
 
@@ -491,6 +540,11 @@ def compare_hint(job: Job, problem: Problem, cards: dict) -> str:
     read = {ti: cards.get(ti) for ti in tis}
     texts = {ti: (st.text or "").strip() for ti, st in read.items() if st is not None and st.state == "read" and st.text}
     lengths = {ti: _length(job, ti) for ti in tis}
+    dubs = {ti: d for ti in tis if (d := dub_language(job, ti, problem))}
+    if len(tis) > 1 and len(dubs) == 1:
+        ti, dub = next(iter(dubs.items()))
+        return (f"Title {ti} has no {lang_name(main_lang(job))} audio, only {dub}, so it's probably this episode "
+                f"dubbed in {dub}: keep it as the {dub} version, or save it as an extra.")
     if len(tis) > 1 and len(texts) == len(tis) and len({_fold(t) for t in texts.values()}) == 1:
         shorter = [ti for ti in tis if is_short_cut(job, ti, problem)]
         if shorter:

@@ -122,8 +122,8 @@ SHOWS = [
 ]
 
 # A season of 7-minute cartoons on two discs, each with one title more than it has episodes:
-# the extra title is a slightly shorter cut of an episode that another title also holds, so two
-# titles end up matched to the same episode. (episode number, playlist, length) per title.
+# the extra title is an episode dubbed in French, a little shorter, which another title also
+# holds in English, so two titles end up matched to the same episode. (episode number, playlist, length) per title.
 BLUEY_D1 = [(25, "00029", 441), (24, "00028", 441), (23, "00027", 441), (22, "00026", 441), (21, "00025", 441),
             (20, "00024", 441), (19, "00023", 441), (17, "00021", 441), (16, "00019", 441), (15, "00018", 441),
             (14, "00017", 441), (13, "00016", 441), (12, "00015", 441), (11, "00014", 441), (10, "00013", 441),
@@ -349,7 +349,10 @@ class FakeController(QueueViews, season.SeasonChecks):
             for k, (n, src, secs) in enumerate(rows):
                 ti = k + 1
                 size = int(secs * 2.4e6)
-                job.titles.append(Title(ti, f"{src}.m2ts", secs, size, 3, [int(src)], _bd_streams(), "episode", True))
+                # 00034 is the episode dubbed in French, with no English audio.
+                streams = _bd_streams() if src != "00034" else \
+                    [st for st in _bd_streams() if st.kind != "audio" or st.lang == "fra"]
+                job.titles.append(Title(ti, f"{src}.m2ts", secs, size, 3, [int(src)], streams, "episode", True))
                 done = disc == 1
                 job.files.append(RippedFile(ti, f"{job.rip_dir}/title_t{ti:02d}.mkv", size,
                                             sha256="0" * 64 if done else "", state="verified" if done else "ripped",

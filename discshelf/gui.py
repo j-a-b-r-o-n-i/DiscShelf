@@ -3411,6 +3411,11 @@ class MatchPage(QWidget):
                     rows.append(("Length", f"{fmt_len(secs)}, {-d} s longer than the other", ""))
                 else:
                     rows.append(("Length", f"{fmt_len(secs)}, about the same as the other", ""))
+            langs = seasonmod.audio_langs(t)
+            dub = seasonmod.dub_language(job, ti, p)
+            if langs:
+                rows.append(("Audio", " and ".join(seasonmod.lang_name(c, t) for c in langs) +
+                             (", none in the disc's main language" if dub else ""), "#F5C27A" if dub else ""))
             locked = ti in self._locked
             tp = prog.get(ti)
             if locked:
@@ -3426,7 +3431,8 @@ class MatchPage(QWidget):
             out.append(CompareTitle(
                 key=f"here:{ti}", title_index=ti, label=f"Title {ti}", sub=sub, rows=rows, path=path,
                 card_t=card_t, card_named=named, fixes=not locked,
-                suggest_keep=named and not seasonmod.is_short_cut(job, ti, p),
+                suggest_keep=named and not seasonmod.is_short_cut(job, ti, p) and not dub,
+                version_text=f"Keep as the {dub} version" if dub else "Keep as a second version",
                 keep_text=f"This is {p.name or p.code}" if keepable and len(p.titles) > 1 else "",
                 note="Already on the NAS, so its match is locked." if locked else "",
                 watch_tip=self.watch_tip(path, card_t)))

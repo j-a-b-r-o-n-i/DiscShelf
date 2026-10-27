@@ -5,7 +5,7 @@ season, where titles 1 and 27 of disc 2 are both matched to one episode.
 
 What matters here: the red banner lists the problem and "Confirm and copy" waits for it;
 Compare opens a panel with both titles; reading just those two cards fills in what each
-read and where, and the hint calls the shorter one a second cut; Watch asks where to start
+read and where, and the hint calls the French-only one a dub; Watch asks where to start
 and opens the player at the title card; "Keep as a second version" settles the problem and
 the file gets " - Short cut"; the season grid shows every episode with a text mark; and
 "This is …" skips the other title and opens its picker.
@@ -87,7 +87,7 @@ def run():
     check(wait(lambda: not win.busy("cards"), 20), "reading the two cards never finished")
     app.processEvents()
     check(set(m.compare_reads) == {1, 27} and m.compare_reads[27][1] == 52.0, f"reads: {m.compare_reads}")
-    check("Title 27 is 7 s shorter" in m.compare.hint.text(), f"hint: {m.compare.hint.text()}")
+    check("Title 27 has no English audio, only French" in m.compare.hint.text(), f"hint: {m.compare.hint.text()}")
     check(not m.compare.read_btn.isVisibleTo(win), "Read both title cards still offered")
     keep1, keep27 = m.compare.fix_buttons.get(("keep", 1)), m.compare.fix_buttons.get(("keep", 27))
     check(keep1 is not None and keep1.property("primary") == "true" and keep27.property("primary") != "true",
@@ -109,14 +109,16 @@ def run():
     check(ctl.played and ctl.played[-1][1] == 52.0, f"watch at the card: {ctl.played[-1:]}")
     check("at the title card (0:52)" in m.season_note.text(), f"note: {m.season_note.text()}")
 
-    # Keep title 27 as a second version: the problem is settled and the file says so.
+    check(m.compare.fix_buttons[("version", 27)].text() == "Keep as the French version",
+          f"version button: {m.compare.fix_buttons[('version', 27)].text()}")
+    # Keep title 27 as the French version: the problem is settled and the file says so.
     m.compare.fix_buttons[("version", 27)].click()
     app.processEvents()
     check(not m.problems.isVisibleTo(win) and not m.compare.isVisibleTo(win), "the problem is still shown")
     t27 = next(x for x in job.matches if x.title_index == 27)
-    check(t27.version == "Short cut" and not t27.held and t27.ready, f"title 27: {t27.version!r} {t27.held!r}")
+    check(t27.version == "French" and not t27.held and t27.ready, f"title 27: {t27.version!r} {t27.held!r}")
     paths = dict(ctl.preview_paths(job))
-    check(paths.get(27, "").endswith("S01E51 - Daddy Putdown - Short cut.mkv"), f"path: {paths.get(27)}")
+    check(paths.get(27, "").endswith("S01E51 - Daddy Putdown - French.mkv"), f"path: {paths.get(27)}")
     check(m.confirm_btn.isEnabled(), "Confirm and copy still waits")
 
     # Picking the same episode again for another title brings the problem back at once,

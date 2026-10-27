@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, replace
 from typing import Callable
 
 from . import naming
+from . import season as season_checks
 from .models import Episode, Job
 
 VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".avi", ".ts", ".m2ts", ".mov", ".wmv", ".mpg", ".mpeg", ".webm"}
@@ -333,6 +334,7 @@ class Reading:
     version: str = ""             # the match's version, e.g. "Short cut"
     seconds: int = 0              # the title's running time
     disc: str = ""                # e.g. "Disc 1, title 26"
+    audio: list[str] = field(default_factory=list)   # the title's audio languages, ISO 639-2
 
 
 def _norm_path(p: str) -> str:
@@ -353,7 +355,8 @@ def readings_from_jobs(jobs: list[Job]) -> dict[str, Reading]:
             said = re.search(r"reads “([^”]+)”", m.note or "")
             disc = f"Disc {job.disc_number}, title {f.title_index}" if job.disc_number else f"Title {f.title_index}"
             out[_norm_path(os.path.join(job.destination, f.dest_rel))] = Reading(
-                m.source, said.group(1) if said else "", m.version, t.duration_s if t else 0, disc)
+                m.source, said.group(1) if said else "", m.version, t.duration_s if t else 0, disc,
+                season_checks.audio_langs(t))
     return out
 
 
@@ -551,7 +554,12 @@ def plan_show(scan: ShowScan, look: Lookup | None, scheme: naming.Scheme | None 
                                              end_t, f.quality, scheme, folder, prefix)
                 targets.append((f, dst, why, kind))
                 continue
-            label = (r.version if r and r.version else "") or f"Version {k + 1}"
+            # A file without the kept file's main audio language is the episode dubbed.
+            r0 = reading(fs[0])
+            dub = ""
+            if r and r.audio and r0 and r0.audio and r0.audio[0] not in r.audio:
+                dub = season_checks.lang_name(r.audio[0])
+            label = (r.version if r and r.version else "") or dub or f"Version {k + 1}"
             fix = fixes.get(f.rel, "version")
             heard = ""
             if r and r.text:
@@ -559,9 +567,11 @@ def plan_show(scan: ShowScan, look: Lookup | None, scheme: naming.Scheme | None 
             elif r and r.source == "discdb":
                 heard = f" TheDiscDB lists it as {e.title}."
             long = f" It's {_len(r.seconds)} long." if r and r.seconds else ""
+            guess = (f"It has only {dub} audio, so it's most likely the episode dubbed in {dub}." if dub else
+                     "Most likely one is a second cut of the episode.")
             plan.problems.append(Problem(
                 "duplicate", f"Two files are {f.code} {e.title}: “{fs[0].name}” and “{f.name}”.{heard}{long} "
-                             "Most likely one is a second cut of the episode.", [fs[0].rel, f.rel], fixable=True,
+                             f"{guess}", [fs[0].rel, f.rel], fixable=True,
                 title=e.title))
             if fix == "extra":
                 dst = naming.extra_relpath(folder, f"{e.title} ({label})", "Featurettes", ext, scheme)
@@ -573,7 +583,8 @@ def plan_show(scan: ShowScan, look: Lookup | None, scheme: naming.Scheme | None 
             else:
                 dst = naming.episode_relpath(look.name, look.year, season, number, f.end, label, ext, e.title,
                                              end_t, f.quality, scheme, folder, prefix)
-                targets.append((f, dst, f"A second cut of {e.title}, kept as a version", "version"))
+                targets.append((f, dst, f"{e.title} in {dub}, kept as a version" if dub else
+                                f"A second cut of {e.title}, kept as a version", "version"))
 
     # Two files may not end up with one name, and a file that stays may not be overwritten.
     moving = {_fold(f.rel) for f, dst, _w, _k in targets if dst != f.rel}

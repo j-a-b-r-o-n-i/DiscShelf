@@ -172,6 +172,7 @@ class CompareTitle:
     card_named: bool = False     # its card reads the episode's name
     fixes: bool = False          # its match can be changed from here
     keep_text: str = ""          # "This is Daddy Putdown", "" when not offered
+    version_text: str = "Keep as a second version"   # "Keep as the French version" for a dub
     suggest_keep: bool = False   # its card names the episode and it isn't the shorter cut
     note: str = ""               # one sentence under the buttons
     watch_tip: str = ""
@@ -288,7 +289,7 @@ class ComparePanel(QFrame):
         self.watch_buttons[t.key] = w
         if t.fixes and t.title_index is not None:
             ti = t.title_index
-            for kind, text, sig in (("keep", t.keep_text, self.keep), ("version", "Keep as a second version", self.version),
+            for kind, text, sig in (("keep", t.keep_text, self.keep), ("version", t.version_text, self.version),
                                     ("extra", "Save as an extra", self.extra), ("pick", "Pick another episode", self.pick)):
                 if not text:
                     continue

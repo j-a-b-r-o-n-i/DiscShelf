@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 from discshelf import discdb, naming, pipeline, season  # noqa: E402
 from discshelf.config import Config, Destination  # noqa: E402
 from discshelf.jobs import JobStore  # noqa: E402
-from discshelf.models import Episode, Job, Match, RippedFile, Title, TitleProgress  # noqa: E402
+from discshelf.models import Episode, Job, Match, RippedFile, Stream, Title, TitleProgress  # noqa: E402
 
 NO_DISCDB = '{"data": {"mediaItems": {"nodes": []}}}'.encode()
 NAMES = ["Kites", "Puddles", "The Shed", "Lanterns", "Ferry", "Marbles", "Postbox", "Rockpool", "Tadpoles", "Bunting"]
@@ -117,6 +117,20 @@ def run():
     check(not season.find_problems(season.title_holders(d3), []), "a second version still clashes")
     rel = naming.relpath_for(d3, by(d3, 2), "tv")
     check(rel.endswith("S01E09 - Tadpoles - Short cut.mkv"), f"second version's file name: {rel}")
+
+    # --- a title dubbed in another language is named for its language, not its length ---
+    dd = disc("dd", "KITES_S1_D5", 5, [10, 10], lengths={2: 434})
+    dd.audio_langs = ["eng", "fra"]
+    dd.titles[0].streams = [Stream(1, "audio", lang="eng"), Stream(2, "audio", lang="eng")]
+    dd.titles[1].streams = [Stream(1, "audio", lang="fra"), Stream(2, "audio", lang="fra")]
+    p = season.find_problems(season.title_holders(dd), [], {(1, 10): NAMES[9]})[0]
+    check(season.version_name(dd, 2, p) == "French", f"dub's version: {season.version_name(dd, 2, p)}")
+    check(season.version_name(dd, 1, p) != "English", f"the original was named as a dub: {season.version_name(dd, 1, p)}")
+    check(season.extra_name(dd, 2, p) == f"{NAMES[9]} (French)", f"dub's extra name: {season.extra_name(dd, 2, p)}")
+    hint = season.compare_hint(dd, p, {})
+    check("no English audio, only French" in hint and "dubbed in French" in hint, f"dub hint: {hint}")
+    dd.titles[1].streams.append(Stream(3, "audio", lang="eng"))
+    check(season.version_name(dd, 2, p) == "Short cut", "a title with the main language too was named as a dub")
 
     # --- the fixes ------------------------------------------------------------------
     d4 = disc("d4", "KITES_S1_D4", 4, [10, 10], lengths={2: 434})

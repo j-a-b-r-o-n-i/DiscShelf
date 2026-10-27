@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from discshelf import library as L  # noqa: E402
-from discshelf.models import Episode, Job, Match, RippedFile, Title  # noqa: E402
+from discshelf.models import Episode, Job, Match, RippedFile, Stream, Title  # noqa: E402
 from discshelf.naming import Scheme  # noqa: E402
 
 SHOW = "Bluey (2018)"
@@ -156,6 +156,16 @@ def run():
         dup_rel = f"{s1} - S01E03 (2).mkv"
         extra = {r.src: r.dst for r in L.plan_show(scan, look, Scheme(), {dup_rel: "extra"}, readings, dest).renames}
         eq(extra[dup_rel], f"{SHOW}/Featurettes/Keepy Uppy (Short cut).mkv", "as an extra")
+        # Records that say the second copy has only French audio name it as the French version.
+        eng, fra = [Stream(1, "audio", lang="eng")], [Stream(1, "audio", lang="fra")]
+        dub = Job(id="d", destination=dest, disc_number=1, titles=[Title(3, duration_s=441, streams=eng),
+                                                                     Title(26, duration_s=434, streams=fra)],
+                  matches=[Match(i, "episode", Episode(1, 3, "Keepy Uppy"), source="discdb") for i in (3, 26)],
+                  files=[RippedFile(3, "", dest_rel=f"{s1} - S01E03.mkv"), RippedFile(26, "", dest_rel=dup_rel)])
+        dplan = L.plan_show(scan, look, Scheme(), readings=L.readings_from_jobs([dub]), records_root=dest, root=root)
+        eq({r.src: r.dst for r in dplan.renames}[dup_rel], f"{s1} - S01E03 - Keepy Uppy - French.mkv", "dub version")
+        dtext = next(p.text for p in dplan.problems if p.kind == "duplicate")
+        check("only French audio" in dtext, f"dub duplicate text: {dtext}")
         aside = L.plan_show(scan, look, Scheme(), {dup_rel: "aside"}, root=root)
         eq({r.src: r.dst for r in aside.renames}[dup_rel], f"{SHOW}/Set aside/{SHOW} - S01E03 (2).mkv", "set aside")
         eq(aside.extra_files, [(f"{SHOW}/Set aside/.plexignore", "*\n")], "plexignore")

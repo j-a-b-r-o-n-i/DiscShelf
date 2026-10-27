@@ -8,6 +8,9 @@
 - Matches are checked against the season's other discs and the files already in its
   season folder, and the episode picker lists free episodes first and says where each taken
   one is.
+- A title that's the same episode dubbed in another language, with no audio in the disc's
+  main language, is recognised as a dub and kept as " - French" (or its language) rather
+  than called a shorter cut, on the Match page and the Library page.
 - A season grid on the Match page shows where every episode of the season is.
 - Watch opens a ripped title in mpv or VLC, at its title card when the card was read.
 - Title cards are found up to 20 minutes into a title: the theme song is recognised by its
