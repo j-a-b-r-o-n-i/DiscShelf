@@ -111,6 +111,7 @@ def run():
 
     check(m.compare.fix_buttons[("version", 27)].text() == "Keep as the French version",
           f"version button: {m.compare.fix_buttons[('version', 27)].text()}")
+    check(("skip", 27) in m.compare.fix_buttons, "no Skip this title button")
     # Keep title 27 as the French version: the problem is settled and the file says so.
     m.compare.fix_buttons[("version", 27)].click()
     app.processEvents()

@@ -2242,6 +2242,7 @@ class MatchPage(QWidget):
         self.compare.keep.connect(lambda ti: self.fix("keep", ti))
         self.compare.version.connect(lambda ti: self.fix("version", ti))
         self.compare.extra.connect(lambda ti: self.fix("extra", ti))
+        self.compare.skip.connect(lambda ti: self.fix("skip", ti))
         self.compare.pick.connect(self.open_picker)
         self.compare.watch.connect(self.watch_compared)
         self.compare.read_cards.connect(self.read_compared_cards)
@@ -3517,6 +3518,9 @@ class MatchPage(QWidget):
             new = seasonmod.fix_version(matches, job, ti, p)
             v = next((m.version for m in new if m.title_index == ti), "")
             text = f"Title {ti} is kept as a second version of {p.episode_text()}, “{v}”."
+        elif kind == "skip":
+            new = seasonmod.fix_skip(matches, ti)
+            text = f"Title {ti} is skipped, so it isn't copied."
         else:
             new = seasonmod.fix_extra(matches, job, ti, p)
             text = f"Title {ti} is saved as an extra, “{seasonmod.extra_name(job, ti, p)}”, in Featurettes."

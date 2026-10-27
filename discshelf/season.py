@@ -533,6 +533,17 @@ def fix_extra(matches: list[Match], job: Job, ti: int, problem: Problem) -> list
     return out
 
 
+def fix_skip(matches: list[Match], ti: int) -> list[Match]:
+    """Leave this title out: it isn't copied, and the other title keeps the episode."""
+    out = _copy.deepcopy(matches)
+    m = _edit(out, ti)
+    if m is not None:
+        m.target, m.episode, m.episode_end, m.version = "skip", None, None, ""
+        m.confidence, m.source, m.confirmed, m.note = "manual", "manual", True, ""
+        m.held, m.held_was = "", ""
+    return out
+
+
 def compare_hint(job: Job, problem: Problem, cards: dict) -> str:
     """One or two sentences to help choose, from the title cards and lengths. cards maps a title
     of this disc to its CardStatus."""
@@ -544,7 +555,7 @@ def compare_hint(job: Job, problem: Problem, cards: dict) -> str:
     if len(tis) > 1 and len(dubs) == 1:
         ti, dub = next(iter(dubs.items()))
         return (f"Title {ti} has no {lang_name(main_lang(job))} audio, only {dub}, so it's probably this episode "
-                f"dubbed in {dub}: keep it as the {dub} version, or save it as an extra.")
+                f"dubbed in {dub}: keep it as the {dub} version, save it as an extra, or skip it.")
     if len(tis) > 1 and len(texts) == len(tis) and len({_fold(t) for t in texts.values()}) == 1:
         shorter = [ti for ti in tis if is_short_cut(job, ti, problem)]
         if shorter:

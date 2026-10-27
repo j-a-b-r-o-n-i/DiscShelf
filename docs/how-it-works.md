@@ -107,6 +107,7 @@ what their audio languages are, what their title cards read and where they are n
   version**.
 - **Save as an extra**: it goes to `Featurettes` as "<episode> (French)" or
   "<episode> (short cut)".
+- **Skip this title**: it isn't copied, and the other title keeps the episode.
 - **Pick another episode** opens the title's picker.
 
 **Read both title cards** reads just those titles. A card is judged on its own here,

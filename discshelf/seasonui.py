@@ -183,6 +183,7 @@ class ComparePanel(QFrame):
     version = Signal(int)
     extra = Signal(int)
     pick = Signal(int)
+    skip = Signal(int)
     watch = Signal(str)          # a CompareTitle key
     read_cards = Signal()
     closed = Signal()
@@ -290,7 +291,8 @@ class ComparePanel(QFrame):
         if t.fixes and t.title_index is not None:
             ti = t.title_index
             for kind, text, sig in (("keep", t.keep_text, self.keep), ("version", t.version_text, self.version),
-                                    ("extra", "Save as an extra", self.extra), ("pick", "Pick another episode", self.pick)):
+                                    ("extra", "Save as an extra", self.extra), ("skip", "Skip this title", self.skip),
+                                    ("pick", "Pick another episode", self.pick)):
                 if not text:
                     continue
                 b = _button(text, primary=kind == "keep" and t.suggest_keep)

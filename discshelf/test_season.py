@@ -132,6 +132,11 @@ def run():
     dd.titles[1].streams.append(Stream(3, "audio", lang="eng"))
     check(season.version_name(dd, 2, p) == "Short cut", "a title with the main language too was named as a dub")
 
+    # Skipping the dub settles it: it isn't copied, and the other keeps the episode.
+    dd.matches = season.fix_skip(dd.matches, 2)
+    check(by(dd, 2).target == "skip" and not by(dd, 2).ready, "skip didn't skip the title")
+    check(not season.find_problems(season.title_holders(dd), []), "a skipped title still clashes")
+
     # --- the fixes ------------------------------------------------------------------
     d4 = disc("d4", "KITES_S1_D4", 4, [10, 10], lengths={2: 434})
     p = season.find_problems(season.title_holders(d4), [], {(1, 10): "Bunting"})[0]
