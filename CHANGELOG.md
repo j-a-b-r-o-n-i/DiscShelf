@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Two titles matched to the same episode are flagged on the Match page instead of being
+  copied as "S01E20 (2)". Both wait until you compare them and keep one, keep both as
+  versions of the episode, or save one as an extra.
+- Matches are checked against the season's other discs and the files already in its
+  season folder, and the episode picker lists free episodes first and says where each taken
+  one is.
+- A season grid on the Match page shows where every episode of the season is.
+- Watch opens a ripped title in mpv or VLC, at its title card when the card was read.
+
 ## 0.1.0 (unreleased)
 
 The first public release.

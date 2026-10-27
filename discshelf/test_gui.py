@@ -67,7 +67,7 @@ def run():
     # The Match page opens the sample disc that is waiting for episodes.
     check(win.match.job is not None and win.match.job.stage == "match", "Match page has no waiting job")
     check(win.match.confirm_btn.text().startswith("Confirm and copy"), f"confirm button: {win.match.confirm_btn.text()}")
-    check(win.history.table.rowCount() == 4, f"history rows: {win.history.table.rowCount()}")
+    check(win.history.table.rowCount() == 5, f"history rows: {win.history.table.rowCount()}")
 
     # The Queue: what needs you first, with the count on the nav item; checks settled in place.
     win.show_page("queue")
@@ -78,10 +78,10 @@ def run():
     check(needs and win.queue_badge.text() == str(len(needs)) and win.queue_badge.isVisibleTo(win),
           f"queue badge: {win.queue_badge.text()} for {len(needs)}")
     cards = win.queue.findChildren(gui.NeedsCard)
-    with_checks = next((c for c in cards if c.item.checks), None)
+    with_checks = next((c for c in cards if any(not r.held for r in c.item.checks)), None)
     check(with_checks is not None and with_checks.rows, "no title to check on the Queue page")
     if with_checks is not None:
-        row = with_checks.item.checks[0]
+        row = next(r for r in with_checks.item.checks if not r.held)
         calls = []
         real_confirm, real_copy = ctl.confirm_title, win.start_copy
         ctl.confirm_title = lambda job, ti, ep: calls.append(("confirm", ti, ep.season, ep.number))

@@ -230,6 +230,41 @@ def run():
     check(next(b for b in pop.chip_buttons if b.isChecked()).text() == "3", "season 3 button not selected")
     pop.close()
 
+    # Free and taken: the disc's own season lists free episodes first, then taken ones saying
+    # where; the title's own episode counts as free for it; taken ones can still be picked.
+    taken = {(3, 1): [(5, "Title 5, this disc")], (3, 2): [(None, "Disc 1, title 7")],
+             (3, 3): [(None, "In the library")], (3, 8): [(3, "Title 3, this disc")], (2, 1): [(None, "Disc 2, title 1")]}
+    picker.set_options(eps, "episode:3:8:", title_index=3, season=3, taken=taken, group_season=3)
+    picker.open_popup()
+    pop = picker.popup
+    heads = [pop.list.item(i).data(ROW)["text"] for i in range(pop.list.count())
+             if pop.list.item(i).data(ROW)["kind"] == "header"]
+    check(heads == ["Free in season 3 · 23", "Taken in season 3 · 3"], f"free and taken headers: {heads}")
+    rows = pop.option_rows()
+    codes = [r["code"] for r in rows]
+    check(codes[-3:] == ["S03E01", "S03E02", "S03E03"], f"taken ones not last: {codes[-4:]}")
+    check(rows[-3]["used"] == "Title 5, this disc" and rows[-1]["used"] == "In the library", f"where: {rows[-3:]}")
+    check(next(r for r in rows if r["code"] == "S03E08")["used"] == "" and "S03E08" in codes[:23],
+          "the title's own episode is listed as taken")
+    check(pop.count.text() == "26 episodes in season 3 · 23 free", f"count: {pop.count.text()!r}")
+    got.clear()
+    it = next(pop.list.item(i) for i in range(pop.list.count()) if pop.list.item(i).data(ROW).get("data") == "episode:3:2:")
+    pop.list.scrollToItem(it)
+    QTest.mouseClick(pop.list.viewport(), Qt.MouseButton.LeftButton, pos=pop.list.visualItemRect(it).center())
+    app.processEvents()
+    check(got == ["episode:3:2:"], f"a taken episode couldn't be picked: {got}")
+    picker.open_popup()
+    pop = picker.popup
+    pop.set_season(None)
+    heads = [pop.list.item(i).data(ROW)["text"] for i in range(pop.list.count())
+             if pop.list.item(i).data(ROW)["kind"] == "header"]
+    check(heads[:3] == ["Free in season 3 · 23", "Taken in season 3 · 3", "Season 1"], f"all seasons: {heads[:4]}")
+    check(pop.list.height() <= 300, "the grouped list grew past its cap")
+    pop.search.setText("zzzz")
+    check(pop.option_rows() == [] and "zzzz" in pop.list.item(pop.list.count() - 1).data(ROW)["text"],
+          "an empty search says nothing")
+    pop.close()
+
     # The wheel does nothing to the button.
     before = picker.currentData()
     ev = QWheelEvent(QPointF(10, 10), QPointF(picker.mapToGlobal(QPoint(10, 10))), QPoint(0, 0), QPoint(0, -120),

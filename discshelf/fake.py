@@ -25,7 +25,8 @@ import zlib
 import time
 from types import SimpleNamespace
 
-from . import av1
+from . import av1, season
+from .play import Player
 from .config import Config, sample_destinations
 from .discinfo import AudioInfo, DiscReport, SubtitleInfo, TitleInfo, VideoInfo
 from .match import feature_match, match_titles, match_list, parse_episode_list
@@ -117,13 +118,41 @@ SHOWS = [
     SimpleNamespace(id=44933, name="Severance", year=2022, network="Apple TV+"),
     SimpleNamespace(id=526, name="The Office (US)", year=2005, network="NBC"),
     SimpleNamespace(id=527, name="The Office", year=2001, network="BBC Two"),
+    SimpleNamespace(id=41821, name="Bluey", year=2018, network="ABC Kids"),
 ]
+
+# A season of 7-minute cartoons on two discs, each with one title more than it has episodes:
+# the extra title is a slightly shorter cut of an episode that another title also holds, so two
+# titles end up matched to the same episode. (episode number, playlist, length) per title.
+BLUEY_D1 = [(25, "00029", 441), (24, "00028", 441), (23, "00027", 441), (22, "00026", 441), (21, "00025", 441),
+            (20, "00024", 441), (19, "00023", 441), (17, "00021", 441), (16, "00019", 441), (15, "00018", 441),
+            (14, "00017", 441), (13, "00016", 441), (12, "00015", 441), (11, "00014", 441), (10, "00013", 441),
+            (9, "00012", 441), (8, "00011", 441), (7, "00009", 441), (18, "00022", 441), (6, "00008", 441),
+            (5, "00007", 441), (4, "00006", 440), (3, "00004", 441), (2, "00003", 441), (1, "00002", 441),
+            (20, "00034", 431), (26, "00032", 441)]
+BLUEY_D2 = [(51, "00029", 441), (52, "00032", 441), (50, "00028", 441), (49, "00027", 441), (48, "00026", 441),
+            (47, "00025", 441), (46, "00024", 441), (45, "00023", 441), (43, "00021", 441), (42, "00019", 441),
+            (41, "00018", 441), (40, "00017", 441), (39, "00016", 441), (38, "00015", 441), (37, "00014", 441),
+            (36, "00013", 441), (35, "00012", 441), (34, "00011", 441), (33, "00009", 441), (44, "00022", 441),
+            (32, "00008", 441), (31, "00007", 441), (30, "00006", 441), (29, "00004", 441), (28, "00003", 441),
+            (27, "00002", 441), (51, "00034", 434)]
+# Where each title's card is on screen, seconds in, when the sample reads it.
+BLUEY_CARD_AT = {1: 74, 27: 52}
 
 EPISODES = {
     (44933, 1): [(1, "Good News About Hell", 57), (2, "Half Loop", 54), (3, "In Perpetuity", 52),
                  (4, "The You You Are", 55), (5, "The Grim Barbarity of Optics and Design", 50),
                  (6, "Hide and Seek", 47), (7, "Defiant Jazz", 51), (8, "What's for Dinner?", 50),
                  (9, "The We We Are", 40)],
+    (41821, 1): [(n + 1, name, 7) for n, name in enumerate((
+        "Magic Xylophone", "Hospital", "Keepy Uppy", "Daddy Robot", "Shadowlands", "The Weekend", "BBQ",
+        "Fruitbat", "Horsey Ride", "Hotel", "Bike", "Bob Bilby", "Spygame", "Takeaway", "Butterflies",
+        "Yoga Ball", "Calypso", "The Doctor", "The Claw", "Markets", "Blue Mountains", "The Pool", "Shops",
+        "Wagon Ride", "Taxi", "The Beach", "Pirates", "Grannies", "The Creek", "Fairies", "Work",
+        "Bumpy and the Wise Old Wolfhound", "Trampoline", "The Dump", "Zoo", "Backpackers", "The Adventure",
+        "Copycat", "The Sleepover", "Early Baby", "Mums and Dads", "Hide and Seek", "Camping",
+        "Mount Mumandad", "Kids", "Chickenrat", "Neighbours", "Teasing", "Asparagus", "Shaun",
+        "Daddy Putdown", "Verandah Santa"))],
     (526, 3): [(1, "Gay Witch Hunt", 22), (2, "The Convention", 22), (3, "The Coup", 22),
                (4, "Grief Counseling", 22), (5, "Initiation", 22), (6, "Diwali", 22), (7, "Branch Closing", 22),
                (8, "The Merger", 22), (9, "The Convict", 27), (10, "A Benihana Christmas", 42),
@@ -171,7 +200,7 @@ def _left(seconds: float) -> str:
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 
-class FakeController(QueueViews):
+class FakeController(QueueViews, season.SeasonChecks):
     def __init__(self, cfg: Config | None = None, delay: float = 0.06):
         self.cfg = cfg or Config()
         if not self.cfg.destinations:
@@ -195,6 +224,7 @@ class FakeController(QueueViews):
         self._card_state: dict[str, dict[int, CardStatus]] = {}
         self._pretend: set[str] = set()     # sample jobs the queue shows as ripping, though nothing runs
         self.ejected = 0
+        self.played: list[tuple[str, float]] = []   # what Watch opened, for tests
         self._enc_phase: dict[tuple[str, int], float] = {}   # (job id, title) -> when its check or copy began
         self._enc_tick = time.monotonic()
         self._seed()
@@ -278,7 +308,41 @@ class FakeController(QueueViews):
         for j in (failed, pitch, office, sev):
             self._jobs[j.id] = j
         self._seed_av1()
+        self._seed_bluey()
 
+    def _seed_bluey(self):
+        """Bluey season 1 on two discs. Disc 1 went to the NAS 3 days ago with titles 6 and 26 both
+        as “Markets” (so the NAS has a “S01E20 (2)”); disc 2 is ripped and matched, and titles 1
+        and 27 are both “Daddy Putdown”, which holds both back."""
+        tv = self.cfg.destination("tv")
+        eps = {n: Episode(1, n, name, rt) for n, name, rt in EPISODES[(41821, 1)]}
+        for disc, rows, created in ((1, BLUEY_D1, 4400), (2, BLUEY_D2, 180)):
+            label = f"BLUEY_S1_D{disc}"
+            job = Job(id=self._new_id(), disc_label=label, media_kind="tv", show="Bluey", show_id=41821,
+                      year=2018, season=1, disc_number=disc, destination=tv.path if tv else "",
+                      library=tv.library if tv else "", rip_dir=f"{self.cfg.rip_path}/{label}",
+                      created=_now(created), updated=_now(created - 30))
+            for k, (n, src, secs) in enumerate(rows):
+                ti = k + 1
+                size = int(secs * 2.4e6)
+                job.titles.append(Title(ti, f"{src}.m2ts", secs, size, 3, [int(src)], _bd_streams(), "episode", True))
+                done = disc == 1
+                job.files.append(RippedFile(ti, f"{job.rip_dir}/title_t{ti:02d}.mkv", size,
+                                            sha256="0" * 64 if done else "", state="verified" if done else "ripped",
+                                            local_deleted=done))
+                job.titles_progress.append(TitleProgress(ti, "verified" if done else "ripped", size, size,
+                                                         size if done else 0, size if done else 0))
+                job.matches.append(Match(ti, "episode", copy.deepcopy(eps[n]), confidence="close", source="discdb"))
+            if disc == 1:
+                self.plan_paths(job)
+                job.stage, job.progress, job.copied_at = "done", 1.0, _now(created - 40)
+                job.status = "Copied to TV Shows and checked. Plex added it."
+            else:
+                job.stage, job.progress = "match", 1.0
+                job.status = "Ripped 27 titles. Match them to episodes next."
+            self._jobs[job.id] = job
+        with self.job_lock:
+            self.apply_season(job)
     def _seed_av1(self):
         """Dune: Part Two's remux is in Plex and its AV1 version is 37% encoded; Blade Runner 2049's
         AV1 version scored 89 on the quality check, so it wasn't copied."""
@@ -470,7 +534,7 @@ class FakeController(QueueViews):
         keep = ripped | {t.index for t in job.titles if t.selected}
         with self.job_lock:
             ms = [m for m in job.matches if m.title_index in keep and m.target != "skip"]
-            paths = dedupe([relpath_for(job, m, layout) for m in ms])
+            paths = dedupe([season.with_version(relpath_for(job, m, layout), m) for m in ms])
         return [(m.title_index, p) for m, p in zip(ms, paths) if p]
 
     def update_matches(self, job: Job, matches: list[Match]) -> None:
@@ -479,6 +543,7 @@ class FakeController(QueueViews):
             old = {m.title_index: m for m in job.matches}
             job.matches = [old[m.title_index] if m.title_index in locked and m.title_index in old else m
                            for m in matches]
+            self.apply_season(job)
 
     def confirm_matches(self, job: Job) -> None:
         with self.job_lock:
@@ -665,9 +730,12 @@ class FakeController(QueueViews):
         with self.job_lock:
             return {ti: copy.copy(st) for ti, st in self._card_state.get(job.id, {}).items()}
 
-    def read_cards(self, job: Job, progress=None, cancel=None) -> int:
+    def read_cards(self, job: Job, progress=None, cancel=None, only=None) -> int:
         """Pretends each ripped title's card names the next episode of the show; the first is clear,
-        the rest need a check."""
+        the rest need a check. Reading only some titles (two that hold one episode) pretends their
+        cards show the episode they're matched to, and changes no match."""
+        if only is not None:
+            return self._read_some(job, set(only), progress, cancel)
         eps = self.episodes(job.show_id, None) if job.show_id else []
         files = [f.title_index for f in job.files]
         if not files or not eps:
@@ -697,6 +765,65 @@ class FakeController(QueueViews):
                     st.state = "stopped"
         return n
 
+    def _read_some(self, job: Job, only: set[int], progress=None, cancel=None) -> int:
+        tis = [f.title_index for f in job.files if f.title_index in only]
+        if not tis:
+            raise ValueError("No ripped titles are left on this computer to read.")
+        with self.job_lock:
+            states = self._card_state.setdefault(job.id, {})
+            for ti in tis:
+                states[ti] = CardStatus()
+        for k, ti in enumerate(tis):
+            if cancel is not None and cancel.is_set():
+                break
+            with self.job_lock:
+                st = states[ti]
+                st.state, st.started = "reading", time.monotonic()
+            self._sleep(steps=8)
+            m = next((m for m in job.matches if m.title_index == ti), None)
+            with self.job_lock:
+                name = m.episode.title.upper() if m is not None and m.episode is not None else ""
+                st.state, st.text, st.sure, st.seconds = "read" if name else "none", name, False, 0.5
+                st.t = float(BLUEY_CARD_AT.get(ti, 40 + ti)) if name else None
+            if progress:
+                progress((k + 1) / len(tis), f"Reading title cards · {k + 1} of {len(tis)}")
+        with self.job_lock:
+            for st in states.values():
+                if st.state in ("waiting", "reading"):
+                    st.state = "stopped"
+        return 0
+
+    def card_reads(self, job: Job, titles: list[int]) -> dict[int, tuple[str, float]]:
+        with self.job_lock:
+            return {ti: (st.text, st.t or 0.0) for ti, st in self._card_state.get(job.id, {}).items()
+                    if ti in titles and st.state == "read" and st.text}
+
+    # -- watching a title ---------------------------------------------------
+    def playable(self, job: Job, ti: int) -> str:
+        """The sample's files aren't on disk, so a title plays once it's ripped, as a real one would."""
+        tp = next((p for p in job.titles_progress if p.title_index == ti), None)
+        if tp is not None and tp.state in ("waiting", "ripping"):
+            return ""
+        f = next((f for f in job.files if f.title_index == ti), None)
+        if f is None:
+            return ""
+        if not f.local_deleted:
+            return f.path
+        return os.path.join(job.destination, f.dest_rel) if f.state == "verified" and f.dest_rel else ""
+
+    def player(self) -> Player | None:
+        return Player("mpv", ["mpv"], True)
+
+    def play(self, path: str, start_s: float = 0.0) -> str:
+        self.played.append((path, start_s))
+        return ""
+
+    def _library_rels(self, job: Job) -> list[str]:
+        return []
+
+    def _save(self, job: Job) -> None:
+        self.save_job(job)
+
     def match_from_list(self, job: Job, show_id: int, text: str) -> list[Match]:
         names = parse_episode_list(text)
         if not names:
@@ -724,7 +851,8 @@ class FakeController(QueueViews):
         layout = d.layout if d else "tv"
         by_title = {m.title_index: m for m in job.matches}
         files = [f for f in job.files if f.title_index in by_title]
-        paths = dedupe([relpath_for(job, by_title[f.title_index], layout) for f in files])
+        paths = dedupe([season.with_version(relpath_for(job, by_title[f.title_index], layout), by_title[f.title_index])
+                       for f in files])
         out = []
         for f, p in zip(files, paths):
             f.dest_rel = p or ""
@@ -735,6 +863,11 @@ class FakeController(QueueViews):
     def copy(self, job: Job, progress, cancel: threading.Event, samples=None) -> None:
         emit = samples or (lambda _s: None)
         with self.job_lock:
+            held = [m for m in job.matches if m.held and any(f.title_index == m.title_index and f.state != "verified"
+                                                              for f in job.files)]
+            if held:
+                raise ValueError(f"{held[0].held} Settle it at the top of the Match page first: compare the "
+                                 "titles, then keep one, keep both as versions, or save one as an extra.")
             files = self.plan_paths(job)
             job.stage = "copy"
             prog = {p.title_index: p for p in job.titles_progress}

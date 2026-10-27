@@ -302,7 +302,15 @@ def run():
             check(waiting and waiting.section == "needs" and [c.title_index for c in waiting.checks] == [1],
                   f"running with a title waiting: {waiting}")
             check(seen.get("copied_before_end") is True, "confirm_title didn't copy the title during the rip")
-            check(rj.stage == "done" and rj.matches[1].episode.number == 6, f"after the per-title rip: {rj.stage}")
+            # Title 2's running-time guess, S01E05, is already on disc 1 (the season check), so it
+            # was held back; once it's given another episode the disc finishes.
+            check(rj.stage == "match" and rj.matches[1].episode.number == 6, f"after the per-title rip: {rj.stage}")
+            check(rj.matches[2].held == "S01E05 “Wizard Battle” is already on disc 1 title 2.",
+                  f"title 2 not held: {rj.matches[2].held!r}")
+            ctl.confirm_title(rj, 2, Episode(1, 7, NAMES[6], 22))
+            check(not rj.matches[2].held and rj.matches[2].ready, "a new episode didn't release title 2")
+            ctl.copy_ready(rj, lambda f, t: None, threading.Event())
+            check(rj.stage == "done", f"after settling title 2: {rj.stage}")
             check(ejected == ["/dev/sr9"], f"eject after the second rip: {ejected}")
 
             # 4. No eject when the setting is off, or when the rip was stopped.

@@ -1,7 +1,10 @@
 """The searchable episode picker on the Match page.
 
 A button that shows the chosen episode and opens a popup with a search field, season
-buttons and a scrolling list of every episode. A volume DVD can list a whole show (278
+buttons and a scrolling list of every episode. When the page says which episodes are taken
+(by another title of this disc, another disc of the season, or a file in the library), the
+disc's own season is listed as "Free in season N" first and "Taken in season N" after, each
+taken one saying where; taken episodes can still be picked. A volume DVD can list a whole show (278
 episodes of Adventure Time), so the list scrolls inside a fixed-height box and the search
 field stays at the top.
 
@@ -441,6 +444,8 @@ class EpisodePopup(QWidget):
         self.current: str = o["current"]
         self.title_index: int = o["title_index"]
         self.used: dict = o["used"] or {}
+        self.taken: dict | None = o.get("taken")
+        self.group_season: int | None = o.get("group_season")
         self.suggestions = o["suggestions"] or []
         self.extra_label: str = o["extra_label"]
         self.double = o["double"]
@@ -556,11 +561,9 @@ class EpisodePopup(QWidget):
         out: list[dict] = []
 
         def ep_row(e: Episode, data: str, code: str, why: str = "") -> dict:
-            other = self.used.get((e.season, e.number))
             return {"kind": "option", "data": data, "code": code, "name": e.title or code, "why": why,
                     "spans": highlight_spans(e.title, words) if words else [],
-                    "used": f"Title {other}" if other is not None and other != self.title_index else "",
-                    "current": data == self.current}
+                    "used": self.where(e), "current": data == self.current}
 
         # The current choice when it isn't an ordinary episode, so it stays pickable.
         special = []
@@ -587,8 +590,27 @@ class EpisodePopup(QWidget):
 
         n = 0
         last_season = None
+        group = self.group_season if self.taken is not None else None
+        if group is not None and season in (None, group):
+            mine = [e for e, folded in zip(self.episodes, self._folded)
+                    if e.season == group and (not words or episode_hits(e, words, folded))]
+            free = [e for e in mine if not self.where(e)]
+            taken = [e for e in mine if self.where(e)]
+            out.append({"kind": "header", "text": f"Free in season {group} · {len(free)}"})
+            if not free:
+                out.append({"kind": "empty", "text": (f"No free episode of season {group} matches “{q.strip()}”."
+                                                      if words else f"None. Every episode of season {group} has a "
+                                                      "title already, so this one may be a second version or an extra.")})
+            out.extend(ep_row(e, ep_data(e), ep_code(e.season, e.number)) for e in free)
+            if taken:
+                out.append({"kind": "header", "text": f"Taken in season {group} · {len(taken)}"})
+                out.extend(ep_row(e, ep_data(e), ep_code(e.season, e.number)) for e in taken)
+            n += len(mine)
+            last_season = group
         for e, folded in zip(self.episodes, self._folded):
             if season and e.season != season:
+                continue
+            if group is not None and e.season == group:
                 continue
             if words and not episode_hits(e, words, folded):
                 continue
@@ -603,10 +625,24 @@ class EpisodePopup(QWidget):
                     + (", or All seasons." if season else ".")) if words else f"No episodes in {scope}."
             if out and out[-1]["kind"] == "divider":
                 out.pop()
+            if out and out[-1]["kind"] == "empty":
+                out.pop()
             out.append({"kind": "empty", "text": text})
         elif lead and lead == len(out):
             out.pop()
         return out, n
+
+    def where(self, e: Episode) -> str:
+        """Where else this episode is, "" when it's free (or only this title has it)."""
+        if self.taken is not None:
+            return " · ".join(text for ti, text in self.taken.get((e.season, e.number), []) if ti != self.title_index)
+        other = self.used.get((e.season, e.number))
+        return f"Title {other}" if other is not None and other != self.title_index else ""
+
+    def free_count(self) -> int | None:
+        if self.taken is None or self.group_season is None:
+            return None
+        return sum(1 for e in self.episodes if e.season == self.group_season and not self.where(e))
 
     def refill(self):
         rows, n = self.rows()
@@ -632,6 +668,9 @@ class EpisodePopup(QWidget):
         content = sum(lw.item(i).sizeHint().height() for i in range(lw.count())) + 2
         lw.setFixedHeight(min(LIST_MAX_H, max(64, content)))
         self.count.setText(count_text(n, self.search.text(), self.season))
+        free = self.free_count()
+        if free is not None and not query_words(self.search.text()):
+            self.count.setText(f"{self.count.text()} · {free} free")
         self.clear_action.setVisible(bool(self.search.text()))
         if self.isVisible():
             self.adjustSize()
@@ -768,7 +807,7 @@ class EpisodePicker(QPushButton):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.popup: EpisodePopup | None = None
         self._opts = {"episodes": [], "current": "skip", "title_index": 0, "used": None, "suggestions": None,
-                      "season": None, "extra_label": "", "double": None}
+                      "season": None, "extra_label": "", "double": None, "taken": None, "group_season": None}
         self._code, self._name = "", "Skip this title"
         self.clicked.connect(self.open_popup)
 
@@ -779,10 +818,16 @@ class EpisodePicker(QPushButton):
                     season: int | None = None,
                     extra_label: str = "",
                     double: tuple[Episode, int] | None = None,
-                    warn: bool = False) -> None:
+                    warn: bool = False,
+                    taken: dict[tuple[int, int], list[tuple[int | None, str]]] | None = None,
+                    group_season: int | None = None) -> None:
+        """taken, when given, says where each episode is held: (title of this disc or None, "Title 6,
+        this disc" / "Disc 1, title 7" / "In the library"); group_season is the disc's own season,
+        listed as free and taken episodes. Without taken, used ({episode: title}) names the title."""
         self._opts = {"episodes": list(episodes), "current": current or "skip", "title_index": title_index,
                       "used": dict(used or {}), "suggestions": list(suggestions or []), "season": season,
-                      "extra_label": extra_label, "double": double}
+                      "extra_label": extra_label, "double": double,
+                      "taken": dict(taken) if taken is not None else None, "group_season": group_season}
         self._set_prop("warn", "true" if warn else None)
         self._show_current()
 
