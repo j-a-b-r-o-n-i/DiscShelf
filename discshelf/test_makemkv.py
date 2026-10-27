@@ -18,6 +18,7 @@ import time
 import types
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from discshelf import hdr  # noqa: E402
 from discshelf import makemkv as mk  # noqa: E402
 from discshelf.config import Config  # noqa: E402
 
@@ -359,9 +360,10 @@ def run():
 
                 def remux():
                     time.sleep(0.2)
-                    tmp = p + ".tmp"
+                    tmp = hdr._temp_beside(p)     # the real temp name, which ends in .mkv
                     with open(tmp, "w") as fh:
                         fh.write("remuxed, a different size")
+                    time.sleep(0.6)      # still being written when the next title's file appears
                     os.replace(tmp, p)
                 rewrites.append(threading.Thread(target=remux))
                 rewrites[-1].start()

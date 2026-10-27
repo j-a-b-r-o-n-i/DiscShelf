@@ -407,7 +407,9 @@ def selection_supported(cfg: Config, run=subprocess.run) -> bool:
 def _mkv_snapshot(out_dir: str) -> dict[str, tuple[float, int]]:
     snap = {}
     for name in os.listdir(out_dir):
-        if name.lower().endswith(".mkv"):
+        # Hidden names are Disc Shelf's own temporary files (the previous title being rewritten
+        # beside it), never MakeMKV's output.
+        if name.lower().endswith(".mkv") and not name.startswith("."):
             try:
                 st = os.stat(os.path.join(out_dir, name))
             except FileNotFoundError:
