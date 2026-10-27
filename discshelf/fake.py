@@ -25,7 +25,7 @@ import zlib
 import time
 from types import SimpleNamespace
 
-from . import av1, nasfix, season
+from . import av1, makemkv, nasfix, season
 from .play import Player
 from .config import Config, sample_destinations
 from .discinfo import AudioInfo, DiscReport, SubtitleInfo, TitleInfo, VideoInfo
@@ -629,6 +629,9 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         t = 0.0
         ejected = False
         opening: dict[int, float] = {}     # title -> when MakeMKV began opening the disc for it
+        # One MakeMKV run for the disc opens it once, as the real controller does when that's quicker.
+        together = self.cfg.rip_in_one_run and makemkv.together_worth_it(
+            [t for t in job.titles if t.selected], job.titles, job.min_seconds)
         reading: dict[int, float] = {}     # title -> when it began reading
         copying: dict[int, float] = {}
 
@@ -653,6 +656,7 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 cur = next((p for p in tp if p.state in ("waiting", "ripping")), None)
                 rate = 0.0
                 if cur is not None and cur.state == "waiting" and mode != "stream" \
+                        and (not together or cur is tp[0]) \
                         and t - opening.setdefault(cur.title_index, t - RIP_TICK) < OPEN_S:
                     # MakeMKV opens the disc before each title, and nothing is written meanwhile.
                     if t - opening[cur.title_index] <= RIP_TICK:

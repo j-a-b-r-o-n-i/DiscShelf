@@ -1,10 +1,10 @@
 """The rip timeline in numbers: how long each title took to open and to read, which read slowly,
 and how long the rest of the disc will take.
 
-MakeMKV is started once per title, and each start opens the disc again before any data is
-written (about 40 s on a Blu-ray). So the time left is worked out per title, from this disc's
-own titles: the time to open the disc, the size MakeMKV actually writes (its own estimate is
-often about twice that), and the speed while reading. Everything here is plain arithmetic
+Each MakeMKV run opens the disc before any data is written (about 40 s on a Blu-ray), and a
+disc is ripped in one run or one run per title. So the time left is worked out per title,
+from this disc's own titles: the time to open the disc, the size MakeMKV actually writes (its
+own estimate is often about twice that), and the speed while reading. Everything here is plain arithmetic
 over Span records; the pipeline and the window both call it.
 """
 from __future__ import annotations

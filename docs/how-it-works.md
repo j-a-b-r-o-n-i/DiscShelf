@@ -165,8 +165,16 @@ start from the beginning. Inside the Flatpak, mpv or VLC on the host is started 
   asked to scan just that folder.
 - **Speed and time left** show in the progress text, with graphs on the Rip and Copy
   screens and progress on the task-manager icon.
-- **The rip timeline** on a disc's card shows each title in turn. MakeMKV is started once
-  per title and opens the disc again each time (about 40 s on a Blu-ray), so that time is
+- **One MakeMKV run for the whole disc.** Each time MakeMKV starts, it opens the disc
+  before writing anything, which takes about 40 s on a Blu-ray. So when the titles you
+  didn't pick are small (short clips, not a play-all title that repeats the whole disc),
+  the disc is ripped in one run: MakeMKV writes every title at least as long as the scan's
+  minimum, one after another, and the ones you didn't pick are deleted as each finishes.
+  Each picked title is handed on for its languages, matching and copy as soon as MakeMKV
+  starts the next one. When ripping the unpicked titles would take longer than opening the
+  disc for every title, each title gets its own run instead. To always use one run per
+  title, set `"rip_in_one_run": false` in `~/.config/disc-shelf/config.json`.
+- **The rip timeline** on a disc's card shows each title in turn. Opening the disc is
   drawn as a hatched band with no speed line. The reading speed is averaged over 20 s,
   because MakeMKV writes in 32 MB blocks a few seconds apart. Below it, rows show when each
   title had its languages kept and when it was copied to the NAS. A title read below 75% of

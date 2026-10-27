@@ -170,8 +170,9 @@ CHUNK, CHUNKS = 32 * 1024, 6
 def make_fake_rip(log, hold=None):
     """A rip_titles that writes each title in chunks and calls the callbacks from its own thread."""
     def fake_rip(cfg_, idx, titles, out_dir, progress, cancel=None, popen=None, min_seconds=0, *,
-                 on_title_start=None, on_title_done=None, on_bytes=None, selection=None):
+                 on_title_start=None, on_title_done=None, on_bytes=None, selection=None, together=False):
         log["selection"] = selection
+        log["together"] = together
         paths = []
 
         def work():
@@ -298,6 +299,7 @@ def run_overlap():
                   f"states: {[tp.state for tp in job.titles_progress]}")
             check(all(os.path.isfile(os.path.join(shows, f.dest_rel)) for f in job.files), "an episode is missing on the NAS")
             check(len(remuxed) == 3, f"remux ran {len(remuxed)} times, expected 3")
+            check(log.get("together") is True, "three episodes and no other titles weren't ripped in one run")
             spans = [s for s in samples if isinstance(s, Span)]
             samples = [s for s in samples if isinstance(s, Sample)]
             for kind in ("rip", "copy"):

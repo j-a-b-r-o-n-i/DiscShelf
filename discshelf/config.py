@@ -72,6 +72,7 @@ class Config:
     stream_films: bool = True    # copy a film while it rips (needs RAW HDR and MakeMKV choosing the languages)
     read_title_cards: bool = True    # read each episode's on-screen title card to match it (needs OCR)
     card_search_minutes: int = 5     # how far into a title to look for its card: 2 | 5 | 10 | 20
+    rip_in_one_run: bool = True      # one MakeMKV run for the whole disc when that's quicker than one per title
     # File names (naming.Scheme). The defaults are Plex's own examples.
     name_episode: str = "name"   # "name": S01E01 - Episode name | "code": S01E01 | "name_quality": … [1080p]
     name_show_year: bool = True  # "Bluey (2018)" rather than "Bluey"

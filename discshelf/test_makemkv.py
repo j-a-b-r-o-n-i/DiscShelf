@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from discshelf import hdr  # noqa: E402
 from discshelf import makemkv as mk  # noqa: E402
 from discshelf.config import Config  # noqa: E402
+from discshelf.models import Title  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -539,6 +540,100 @@ def run():
             return FakeProc(cmd, out, RIP_LINES)
         mk.rip_titles(fcfg, 0, [1], out, lambda f, t: None, popen=popen)
         check(cmds and f"--filesystem={out}" in cmds[0] and cmds[0][-1] == out, f"flatpak rip command: {cmds}")
+
+    # The whole disc in one run: MakeMKV opens the disc once and writes titles 0 to 4 one after
+    # another. Titles 0 and 3 weren't picked and are deleted; each picked title is handed on
+    # when the next one's file appears, before MakeMKV has finished the disc.
+    class AllProc:
+        def __init__(self, cmd, out_dir, fail_title=None, rc=0):
+            self.cmd, self.out_dir, self.fail_title, self.rc = cmd, out_dir, fail_title, rc
+            self.returncode = None
+            self.stdout = self._out()
+            self.events = []
+
+        def _out(self):
+            yield 'MSG:1005,0,1,"MakeMKV v2.0.0 started","%1 started","MakeMKV v2.0.0"\n'
+            time.sleep(0.3)                     # opening the disc
+            for ti in range(5):
+                path = os.path.join(self.out_dir, f"Show_t{ti:02d}.mkv")
+                with open(path, "w") as fh:
+                    fh.write("x" * 100)
+                    fh.flush()
+                    time.sleep(0.3)
+                    fh.write("x" * (900 + ti))
+                self.events.append(("written", ti, sorted(os.listdir(self.out_dir))))
+                if ti == self.fail_title:
+                    yield f'MSG:5003,0,2,"Failed to save title {ti} to file {path}","x","{ti}","{path}"\n'
+                yield f"PRGV:{ti + 1},{ti + 1},5\n"
+            failed = 1 if self.fail_title is not None else 0
+            yield f'MSG:5036,0,2,"Copy complete. {5 - failed} titles saved, {failed} failed.","x","4","{failed}"\n'
+
+        def wait(self):
+            self.returncode = self.rc
+            return self.rc
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = -15
+
+    with tempfile.TemporaryDirectory() as out:
+        events, procs = [], []
+
+        def popen(cmd, **kw):
+            procs.append(AllProc(cmd, out))
+            return procs[-1]
+
+        def done(t, p):
+            events.append(("done", t, os.path.basename(p), sorted(os.listdir(out))))
+
+        paths = mk.rip_titles(cfg, 0, [1, 2, 4], out, lambda f, t: None, popen=popen, min_seconds=120,
+                              together=True, on_title_start=lambda t, p: events.append(("start", t)),
+                              on_title_done=done, bytes_interval=0.05)
+        eq(len(procs), 1, "makemkvcon runs for the whole disc")
+        eq(procs[0].cmd[-4:], ["mkv", "disc:0", "all", out], "one-run command")
+        check("--minlength=120" in procs[0].cmd, f"the scan's minimum length isn't passed: {procs[0].cmd}")
+        eq([os.path.basename(p) for p in paths], ["Show_t01.mkv", "Show_t02.mkv", "Show_t04.mkv"], "kept files")
+        eq(sorted(n for n in os.listdir(out) if n.endswith(".mkv")), ["Show_t01.mkv", "Show_t02.mkv", "Show_t04.mkv"],
+           "titles that weren't picked are deleted")
+        eq([e[:2] for e in events], [("start", 1), ("done", 1), ("start", 2), ("done", 2), ("start", 4), ("done", 4)],
+           "callbacks in order, only for picked titles")
+        first_done = next(e for e in events if e[0] == "done")
+        check("Show_t02.mkv" in first_done[3], "title 1 wasn't handed on as soon as title 2 started")
+        check(os.path.getsize(paths[0]) == 1001, "title 1 handed on before it was complete")
+
+    # A picked title MakeMKV couldn't save is never handed on, and the run raises after the rest.
+    with tempfile.TemporaryDirectory() as out:
+        done_titles = []
+        try:
+            mk.rip_titles(cfg, 0, [1, 2], out, lambda f, t: None, together=True, bytes_interval=0.05,
+                          popen=lambda cmd, **kw: AllProc(cmd, out, fail_title=1),
+                          on_title_done=lambda t, p: done_titles.append(t))
+            check(False, "a failed title didn't raise")
+        except RuntimeError as e:
+            check("title 1" in str(e), f"failed title message: {e}")
+        eq(done_titles, [2], "titles handed on when title 1 failed")
+        check(not os.path.exists(os.path.join(out, "Show_t01.mkv")), "the failed title's file was kept")
+
+    # MakeMKV stopping part way: the half-written title is removed.
+    with tempfile.TemporaryDirectory() as out:
+        try:
+            mk.rip_titles(cfg, 0, [1, 2, 4], out, lambda f, t: None, together=True, bytes_interval=0.05,
+                          popen=lambda cmd, **kw: AllProc(cmd, out, rc=1))
+            check(False, "a non-zero exit didn't raise")
+        except RuntimeError:
+            pass
+        check(not os.path.exists(os.path.join(out, "Show_t04.mkv")), "the last, unfinished title was kept")
+
+    # When one run is worth it: the unpicked titles must take less time than reopening the disc.
+    eps = [Title(i, f"{i:05d}.m2ts", 440, int(1.93e9), 1) for i in range(1, 26)]
+    clips = [Title(0, "00002.mpls", 165, int(0.55e9), 1), Title(26, "00034.m2ts", 155, int(0.13e9), 1)]
+    check(mk.together_worth_it(eps, eps + clips, 120), "25 episodes and two clips: one run")
+    play_all = Title(30, "00800.mpls", 3 * 3600, int(40e9), 25)
+    check(not mk.together_worth_it(eps, eps + clips + [play_all], 120), "a play-all title isn't worth ripping")
+    check(mk.together_worth_it(eps, eps + clips + [play_all], 4 * 3600), "below the minimum length it isn't ripped")
+    check(not mk.together_worth_it(eps[:1], eps, 120), "one title: per-title run")
 
     # Eject
     eq(mk.eject("/dev/sr0", run=fake_run("", 0)), True, "eject ok")

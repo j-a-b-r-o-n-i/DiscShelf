@@ -1119,6 +1119,12 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             self._save(job)
 
         order = [t.index for t in picked]
+        # One MakeMKV run for the whole disc saves opening it again for every title, when the
+        # titles that weren't picked are small enough to rip and throw away.
+        together = mode != "stream" and self.cfg.rip_in_one_run and _rip_accepts("together") \
+            and makemkv.together_worth_it(picked, job.titles, job.min_seconds)
+        if together:
+            order = sorted(order)           # MakeMKV writes them in title order
         n = len(order)
         total_size = sum(t.size_bytes for t in picked)
         workdir = os.path.join(job.rip_dir, ".work")
@@ -1206,6 +1212,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 run.q.put(("post", ti))
 
         kwargs: dict = {"min_seconds": job.min_seconds}
+        if together:
+            kwargs["together"] = True
         if _rip_accepts("on_title_done"):
             kwargs.update(on_title_start=on_title_start, on_title_done=on_title_done, on_bytes=on_bytes)
         if mode == "stream":

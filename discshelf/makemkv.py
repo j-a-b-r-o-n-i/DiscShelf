@@ -510,8 +510,10 @@ def rip_titles(cfg: Config, drive_index: int, title_indices: list[int], out_dir:
                on_bytes: Callable[[int, str, int], None] | None = None,
                selection: str | None = None,
                preferred_lang: str = "",
-               bytes_interval: float = 1.0) -> list[str]:
-    """Rip each title to an MKV in out_dir, one makemkvcon run per title.
+               bytes_interval: float = 1.0,
+               together: bool = False) -> list[str]:
+    """Rip each title to an MKV in out_dir, one makemkvcon run per title, or with
+    together=True all in one run (see rip_together and together_worth_it).
 
     progress(fraction, text) gets the overall fraction across all titles. Returns the
     new or rewritten .mkv paths in title order (MakeMKV names them "<disc name>_tNN.mkv",
@@ -528,6 +530,10 @@ def rip_titles(cfg: Config, drive_index: int, title_indices: list[int], out_dir:
     through a temporary --profile; check selection_supported(cfg) first. None leaves
     MakeMKV's own default.
     """
+    if together:
+        return rip_together(cfg, drive_index, title_indices, out_dir, progress, cancel, popen, min_seconds,
+                            on_title_start=on_title_start, on_title_done=on_title_done, on_bytes=on_bytes,
+                            selection=selection, preferred_lang=preferred_lang, bytes_interval=bytes_interval)
     os.makedirs(out_dir, exist_ok=True)
     n = len(title_indices)
     paths: list[str] = []
@@ -618,6 +624,183 @@ def rip_titles(cfg: Config, drive_index: int, title_indices: list[int], out_dir:
                     _safe(on_title_done, t_index, tw.path)
             progress((i + 1) / n, f"{label}: done")
     return paths
+
+
+_FILE_TITLE_RE = re.compile(r"_t(\d+)\.mkv$", re.IGNORECASE)
+_FAILED_TITLE_RE = re.compile(r"Failed to save title (\d+)", re.IGNORECASE)
+
+
+def rip_together(cfg: Config, drive_index: int, title_indices: list[int], out_dir: str,
+                 progress: Progress, cancel: threading.Event | None = None,
+                 popen=subprocess.Popen, min_seconds: int = 0, *,
+                 on_title_start: Callable[[int, str], None] | None = None,
+                 on_title_done: Callable[[int, str], None] | None = None,
+                 on_bytes: Callable[[int, str, int], None] | None = None,
+                 selection: str | None = None,
+                 preferred_lang: str = "",
+                 bytes_interval: float = 1.0) -> list[str]:
+    """Rip every title at least min_seconds long in one makemkvcon run ("all"), keeping
+    title_indices and deleting the others as each finishes.
+
+    MakeMKV opens the disc once, instead of once per title as rip_titles does (about 40 s
+    each on a Blu-ray). It numbers titles the same way as an info scan with the same
+    min_seconds, and writes them one after another, so a title is finished when the next
+    one's file appears, or when makemkvcon exits. The callbacks are rip_titles', except that
+    on_title_done runs on the background thread too, as soon as the title is finished.
+    Returns the kept paths in title order. Raises Cancelled, or RuntimeError if MakeMKV
+    fails or a title in title_indices wasn't written; titles finished before that have
+    already been handed on."""
+    os.makedirs(out_dir, exist_ok=True)
+    wanted = set(title_indices)
+    n = len(wanted)
+    paths: dict[int, str] = {}
+    lock = threading.Lock()
+    failed: set[int] = set()
+
+    with apply_selection(selection, out_dir, preferred_lang) as extra:
+        progress(0.0, "Opening the disc")
+        before = _mkv_snapshot(out_dir)
+        cmd = command(cfg, out_dir) + ["-r", "--progress=-same", f"--minlength={int(min_seconds)}",
+                                       *extra, "mkv", f"disc:{drive_index}", "all", out_dir]
+        try:
+            proc = popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        except FileNotFoundError:
+            raise RuntimeError(f"MakeMKV is not installed, or {cmd[0]!r} is not on the PATH.")
+
+        stopped = threading.Event()
+        state = {"cur": None, "started": [], "last_bytes": 0.0, "size": -1}
+
+        def finish(ti: int, path: str) -> None:
+            with lock:
+                bad = ti in failed
+            if ti in wanted and not bad:
+                try:
+                    size = os.path.getsize(path)
+                except OSError:
+                    return
+                if on_bytes:
+                    _safe(on_bytes, ti, path, size)
+                paths[ti] = path
+                if on_title_done:
+                    _safe(on_title_done, ti, path)
+            else:
+                with contextlib.suppress(OSError):
+                    os.remove(path)
+
+        def look() -> None:
+            """Hand on finished titles and start new ones; report the current one's size."""
+            found = {}
+            for name in _changed(before, out_dir):
+                m = _FILE_TITLE_RE.search(name)
+                if m and name not in before:
+                    found[int(m.group(1))] = os.path.join(out_dir, name)
+            for ti in sorted(t for t in found if t not in state["started"]):
+                if state["cur"] is not None:
+                    finish(*state["cur"])
+                state["started"].append(ti)
+                state["cur"] = (ti, found[ti])
+                state["size"] = -1
+                if ti in wanted and on_title_start:
+                    _safe(on_title_start, ti, found[ti])
+            cur = state["cur"]
+            if cur is not None and cur[0] in wanted and on_bytes:
+                try:
+                    size = os.path.getsize(cur[1])
+                except OSError:
+                    return
+                if size != state["size"]:
+                    state["size"] = size
+                    _safe(on_bytes, cur[0], cur[1], size)
+
+        def watch_files() -> None:
+            tick = min(0.25, bytes_interval)
+            while not stopped.wait(tick):
+                look()
+
+        def watch_cancel() -> None:
+            while not stopped.is_set():
+                if cancel.wait(0.25):
+                    if proc.poll() is None:
+                        proc.terminate()
+                    return
+
+        watcher = threading.Thread(target=watch_files, daemon=True)
+        watcher.start()
+        if cancel is not None:
+            threading.Thread(target=watch_cancel, daemon=True).start()
+
+        messages: list[str] = []
+        failed_count = 0
+        bad_selection = ""
+        frac = 0.0
+        try:
+            for line in proc.stdout:
+                parsed = parse_line(line)
+                if not parsed:
+                    continue
+                kind, f = parsed
+                if kind == "PRGV" and len(f) >= 3:
+                    total, mx = _int(f[1]), _int(f[2])
+                    frac = min(max(total / mx, 0.0), 1.0) if mx > 0 else frac
+                    k = sum(1 for t in state["started"] if t in wanted)
+                    progress(frac, f"Title {max(1, k)} of {n}" if k else "Opening the disc")
+                elif kind == "MSG" and len(f) >= 4:
+                    messages.append(f[3])
+                    m = _FAILED_TITLE_RE.search(f[3])
+                    if m:
+                        with lock:
+                            failed.add(int(m.group(1)))
+                    m = _SAVED_RE.search(f[3])
+                    if m:
+                        failed_count = int(m.group(2))
+                    if selection is not None and (
+                            any(e in f[3] for e in SELECTION_ERRORS)
+                            or ("using profile" in f[3] and PROFILE_NAME not in f[3])):
+                        bad_selection = f[3]
+            rc = proc.wait()
+        finally:
+            stopped.set()
+            watcher.join()
+
+        cancelled = cancel is not None and cancel.is_set()
+        if not (cancelled or rc != 0 or bad_selection):
+            look()                  # a title that appeared after the last look
+            if state["cur"] is not None:
+                finish(*state["cur"])
+                state["cur"] = None
+        elif state["cur"] is not None:
+            # a half-written MKV is useless and would be mistaken for a finished one later
+            with contextlib.suppress(OSError):
+                os.remove(state["cur"][1])
+        if cancelled:
+            raise Cancelled()
+        if bad_selection:
+            raise RuntimeError(f"MakeMKV did not accept the track selection: {bad_selection}")
+        last = messages[-1] if messages else f"makemkvcon exited with code {rc}"
+        if rc != 0:
+            raise RuntimeError(f"MakeMKV stopped ripping: {last}")
+        missing = sorted(wanted - set(paths))
+        if missing or (failed_count and not failed):   # unpicked titles that failed don't matter
+            which = ", ".join(str(t) for t in missing) or "one title"
+            raise RuntimeError(f"MakeMKV could not rip title {which}: {last}")
+        progress(1.0, "Done")
+    return [paths[ti] for ti in sorted(paths)]
+
+
+def together_worth_it(wanted: list[Title], everything: list[Title], min_seconds: int,
+                      open_s: float = 40.0, rate: float = 9e6) -> bool:
+    """Whether one MakeMKV run for the whole disc is quicker than one per title.
+
+    One run saves opening the disc for every title after the first, but also rips the
+    titles at least min_seconds long that weren't picked (a play-all title can be the
+    whole disc again). rate is a cautious Blu-ray reading speed in bytes per second."""
+    if len(wanted) < 2:
+        return False
+    keep = {t.index for t in wanted}
+    extra = [t for t in everything if t.index not in keep and t.duration_s >= min_seconds]
+    if any(not t.size_bytes for t in extra):
+        return False
+    return sum(t.size_bytes for t in extra) / rate < (len(wanted) - 1) * open_s
 
 
 def eject(device: str, run=subprocess.run) -> bool:

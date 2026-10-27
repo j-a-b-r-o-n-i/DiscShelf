@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A disc is ripped in one MakeMKV run when the titles that weren't picked are small, instead
+  of one run per title, so the disc is opened once rather than for every title. On a
+  25-episode Blu-ray that saves about 17 minutes. Picked titles are still handed on one by
+  one as they finish, and the others are deleted.
 - The rip graph is now a timeline of each title: MakeMKV opening the disc, reading (with
   the speed averaged over 20 s), keeping languages and copying to the NAS, with slow titles
   marked and the rest of the rip drawn as an estimate. The time left is worked out from
