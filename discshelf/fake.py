@@ -30,7 +30,7 @@ from .play import Player
 from .config import Config, sample_destinations
 from .discinfo import AudioInfo, DiscReport, SubtitleInfo, TitleInfo, VideoInfo
 from .match import feature_match, match_titles, match_list, parse_episode_list
-from .models import Disc, Drive, EncodeJob, Episode, HdrInfo, Job, Match, RippedFile, Sample, Stream, Title, TitleProgress
+from .models import Disc, Drive, EncodeJob, Episode, HdrInfo, Job, Match, RippedFile, Sample, Span, Stream, Title, TitleProgress
 from .naming import EXTRAS_FOLDERS, Scheme, dedupe, relpath_for, season_folder, show_folder
 from .pipeline import (ENCODE_ACTIVE, CardStatus, EncodeStatus, QueueView, QueueViews, _enc, _encode_holds,
                        _video_width)
@@ -183,6 +183,7 @@ def _sample_library(root: str) -> None:
 
 
 RIP_TICK = 10.0      # simulated seconds per step while ripping (one sample per step)
+OPEN_S = 40.0        # simulated seconds MakeMKV takes to open the disc before each title
 ENCODE_STEPS = 400   # a whole simulated encode takes this many delays (24 s at the window's 0.06)
 COPY_TICK = 2.0      # simulated seconds per step during a copy-only run
 TAIL = 512_000_000   # a film copied while it rips stays this far behind the rip
@@ -627,6 +628,9 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         mode = job.copy_mode
         t = 0.0
         ejected = False
+        opening: dict[int, float] = {}     # title -> when MakeMKV began opening the disc for it
+        reading: dict[int, float] = {}     # title -> when it began reading
+        copying: dict[int, float] = {}
 
         def ready(p: TitleProgress) -> bool:
             m = next((m for m in job.matches if m.title_index == p.title_index), None)
@@ -648,14 +652,27 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             with self.job_lock:
                 cur = next((p for p in tp if p.state in ("waiting", "ripping")), None)
                 rate = 0.0
-                if cur is not None:
+                if cur is not None and cur.state == "waiting" and mode != "stream" \
+                        and t - opening.setdefault(cur.title_index, t - RIP_TICK) < OPEN_S:
+                    # MakeMKV opens the disc before each title, and nothing is written meanwhile.
+                    if t - opening[cur.title_index] <= RIP_TICK:
+                        emit(Span("open", cur.title_index, opening[cur.title_index]))
+                elif cur is not None:
+                    ti = cur.title_index
+                    if ti not in reading:
+                        if ti in opening:
+                            emit(Span("open", ti, opening[ti], t - RIP_TICK))
+                        reading[ti] = t - RIP_TICK
+                        emit(Span("read", ti, reading[ti]))
                     rate = self._rip_rate(t, span)
                     cur.state, cur.rip_rate = "ripping", rate
                     cur.ripped_bytes = min(cur.total_bytes, cur.ripped_bytes + int(rate * RIP_TICK))
+                    emit(Sample(t, "rip", rate, sum(p.ripped_bytes for p in tp)))
                     if cur.ripped_bytes >= cur.total_bytes:
                         cur.state, cur.rip_rate = "ripped", 0.0
                         job.files.append(self._new_file(job, by_index[cur.title_index]))
-                    emit(Sample(t, "rip", rate, sum(p.ripped_bytes for p in tp)))
+                        emit(Span("read", ti, reading[ti], t, cur.total_bytes))
+                        emit(Span("languages", ti, t, t + 8, 0))
                 # What each ripped title does next depends on its match.
                 for p in tp:
                     if p.state in ("ripped", "waiting_match") and mode != "after":
@@ -677,6 +694,8 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                     if active.state in ("ripped", "copying") or mode == "stream":
                         if active.state == "ripped":
                             active.state = "copying"
+                            copying[active.title_index] = t
+                            emit(Span("copy", active.title_index, t))
                             with_dest = self.plan_paths(job)
                             for f in with_dest:
                                 if f.title_index == active.title_index:
@@ -696,6 +715,8 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                         active.checked_bytes = min(active.total_bytes, active.checked_bytes + int(400e6 * RIP_TICK))
                         if active.checked_bytes >= active.total_bytes:
                             active.state, active.copy_rate = "verified", 0.0
+                            if active.title_index in copying:
+                                emit(Span("copy", active.title_index, copying[active.title_index], t))
                             for f in job.files:
                                 if f.title_index == active.title_index:
                                     f.state, f.sha256 = "verified", "0" * 64

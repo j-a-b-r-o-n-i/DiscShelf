@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 from discshelf import config, discdb, hdr, makemkv, pipeline  # noqa: E402
 from discshelf.config import Config, Destination  # noqa: E402
 from discshelf.jobs import JobStore  # noqa: E402
-from discshelf.models import Disc, Drive, Episode, HdrInfo, HdrPolicy, Job, Stream, Title  # noqa: E402
+from discshelf.models import Disc, Drive, Episode, HdrInfo, HdrPolicy, Job, Sample, Span, Stream, Title  # noqa: E402
 
 
 class FakeTvMaze:
@@ -298,11 +298,25 @@ def run_overlap():
                   f"states: {[tp.state for tp in job.titles_progress]}")
             check(all(os.path.isfile(os.path.join(shows, f.dest_rel)) for f in job.files), "an episode is missing on the NAS")
             check(len(remuxed) == 3, f"remux ran {len(remuxed)} times, expected 3")
+            spans = [s for s in samples if isinstance(s, Span)]
+            samples = [s for s in samples if isinstance(s, Sample)]
             for kind in ("rip", "copy"):
                 tot = [s.total for s in samples if s.kind == kind]
                 check(len(tot) >= 2 and tot == sorted(tot) and tot[-1] > tot[0], f"{kind} sample totals: {tot}")
             rip_total = max(s.total for s in samples if s.kind == "rip")
             check(rip_total == 3 * CHUNKS * CHUNK, f"rip total {rip_total}")
+            # The timeline: each title opens, reads, has its languages kept and is copied, in that order.
+            last = {}
+            for sp in spans:
+                last[(sp.kind, sp.title_index)] = sp
+            for ti in {sp.title_index for sp in spans}:
+                got = [last.get((k, ti)) for k in ("open", "read", "languages", "copy")]
+                check(all(g is not None and g.end is not None for g in got), f"title {ti}'s steps: {got}")
+                if all(g is not None and g.end is not None for g in got):
+                    check(got[0].end <= got[1].start and got[1].end <= got[2].start and got[2].end <= got[3].start,
+                          f"title {ti}'s steps out of order: {got}")
+                    check(got[1].bytes == CHUNKS * CHUNK, f"title {ti} read {got[1].bytes} bytes")
+            check(len({sp.title_index for sp in spans}) == 3, f"titles on the timeline: {spans}")
 
             # 2. A change to a title already on the NAS is ignored, even if made in place.
             ms = copy.deepcopy(job.matches)
@@ -362,7 +376,10 @@ def run_overlap():
             with open(f0.path, "rb") as fh:
                 local = hashlib.sha256(fh.read()).hexdigest()
             check(os.path.isfile(dest) and f0.sha256 == local, "the streamed film's NAS copy or hash is wrong")
-            check({s.kind for s in samples} == {"rip", "copy"}, f"film sample kinds: {({s.kind for s in samples})}")
+            check({s.kind for s in samples if isinstance(s, Sample)} == {"rip", "copy"},
+                  f"film sample kinds: {({s.kind for s in samples})}")
+            check({s.kind for s in samples if isinstance(s, Span)} == {"open", "read"},
+                  f"a streamed film's timeline: {({s.kind for s in samples if isinstance(s, Span)})}")
 
             # 5. The same film with a non-RAW HDR setting is copied after its rip instead, and says why.
             remuxed.clear()

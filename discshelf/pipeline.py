@@ -26,14 +26,15 @@ import re
 import shutil
 import threading
 import time
+import traceback
 from typing import Callable
 
 from . import (av1, caseocr, classify, config, discdb, discinfo, hdr, makemkv, match, naming, ocr, theme, titlecard,
                transfer, watch)
-from . import nasfix, play, season
+from . import nasfix, play, ripstats, season
 from .config import Config
 from .jobs import JobStore, now_iso
-from .models import Disc, Drive, EncodeJob, Episode, Job, Match, RippedFile, Sample, Title, TitleProgress
+from .models import Disc, Drive, EncodeJob, Episode, Job, Match, RippedFile, Sample, Span, Title, TitleProgress
 from .plex import Plex, PlexError
 from .tvmaze import TvMaze, TvMazeError
 
@@ -45,6 +46,7 @@ except ImportError:     # without it a film is copied after its rip, like any ot
 Progress = Callable[[float, str], None]
 SCAN_MIN_SECONDS = 120     # shorter titles are menus and logos; scan and rip must agree on this
 BLURAY_1X = 4.5e6          # bytes per second at 1× Blu-ray speed
+RIP_WINDOW = 20.0          # seconds the rip speed is averaged over; MakeMKV writes in 32 MB blocks
 RIP_SHARE = 0.9            # of the overall progress bar; the rest is what is left to do after the rip
 LOCKED_STATES = ("copying", "checking", "verified")      # the match can no longer change
 WAITING_STATES = ("ripped", "waiting_match", "skipped")  # ripped and not on the NAS: may be queued for copying
@@ -196,6 +198,12 @@ class _Meter:
         self._last: float | None = None
         self._lock = threading.Lock()
 
+    def restart(self) -> None:
+        """Forget the readings so far, so time spent with nothing to read isn't averaged in."""
+        with self._lock:
+            self.points.clear()
+            self.rate = 0.0
+
     def update(self, total: int) -> None:
         now = time.monotonic()
         with self._lock:
@@ -234,9 +242,12 @@ class _Run:
     def __init__(self, job: Job, mode: str, cancel: threading.Event, interval: float,
                  samples: Callable[[Sample], None] | None, progress: Progress):
         self.job, self.mode, self.cancel = job, mode, cancel
-        t0 = time.monotonic()
-        self.rip_meter = _Meter("rip", samples, interval, t0)
+        self.t0 = t0 = time.monotonic()
+        self.rip_meter = _Meter("rip", samples, interval, t0, window=RIP_WINDOW)
         self.copy_meter = _Meter("copy", samples, interval, t0)
+        self.sink = samples
+        self.spans: dict[tuple[str, int], Span] = {}    # the rip timeline, by (kind, title)
+        self._span_lock = threading.Lock()
         self.emit = _Emitter(job, progress)
         self.q: queue.Queue = queue.Queue()      # ("post" | "copy", title_index), None to finish
         self.thread: threading.Thread | None = None
@@ -260,6 +271,28 @@ class _Run:
         self.cards_q: queue.Queue = queue.Queue()    # (title_index, path), None to finish
         self.cards_thread: threading.Thread | None = None
         self.card_pending: set[int] = set()          # ripped titles whose card isn't read yet
+
+    def span(self, kind: str, ti: int, end: bool = False, size: int = 0) -> None:
+        """Start (or with end=True, finish) one step of a title on the timeline, and send it on."""
+        now = time.monotonic() - self.t0
+        with self._span_lock:
+            sp = self.spans.get((kind, ti))
+            if end:
+                if sp is None or sp.end is not None:
+                    return
+                sp = dataclasses.replace(sp, end=now, bytes=size or sp.bytes)
+            else:
+                sp = Span(kind, ti, now)
+            self.spans[(kind, ti)] = sp
+        if self.sink is not None:
+            try:
+                self.sink(sp)
+            except Exception:  # noqa: BLE001 -- a failing display never stops a rip
+                traceback.print_exc()
+
+    def timeline(self) -> list[Span]:
+        with self._span_lock:
+            return list(self.spans.values())
 
 
 @dataclass
@@ -1091,15 +1124,28 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         workdir = os.path.join(job.rip_dir, ".work")
         os.makedirs(workdir, exist_ok=True)
 
+        sizes = {t.index: t.size_bytes for t in picked}
+
         def rip_text(f: float) -> str:
             k = max(1, min(n, run.started or int(f * n) + 1))
             text = f"Ripping title {k} of {n}"
+            spans = run.timeline()
+            opening = any(s.kind == "open" and s.end is None for s in spans) and \
+                not any(s.kind == "read" and s.end is None for s in spans)
             rate = run.rip_meter.rate
-            if rate > 0:
+            if opening:
+                text += " · opening the disc"
+            elif rate > 0:
                 text += f" · {rate / 1e6:.1f} MB/s · {rate / BLURAY_1X:.1f}×"
-                left = max(0, total_size - run.rip_meter.total) / rate if total_size else 0
-                if left > 0:
-                    text += f" · {math.ceil(left / 60)} min left"
+            with self.job_lock:
+                ripped = {p.title_index: p.ripped_bytes for p in job.titles_progress}
+            est = ripstats.estimate(order, sizes, spans, time.monotonic() - run.t0, ripped) if spans else None
+            if est is not None:
+                left = est.seconds
+            else:   # MakeMKV without the per-title callbacks: the whole disc at the latest speed
+                left = max(0, total_size - run.rip_meter.total) / rate if total_size and rate > 0 else 0
+            if left > 0:
+                text += f" · {math.ceil(left / 60)} min left"
             return text
 
         def ripping(f: float, _text: str) -> None:
@@ -1108,6 +1154,9 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             run.emit(RIP_SHARE * f, rip_text(f))
 
         def on_title_start(ti: int, path: str) -> None:
+            run.span("open", ti, end=True)
+            run.span("read", ti)
+            run.rip_meter.restart()
             with self.job_lock:
                 run.started += 1
                 tp = _tp(job, ti)
@@ -1131,6 +1180,10 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
 
         def on_title_done(ti: int, path: str) -> None:
             size = os.path.getsize(path)
+            run.span("read", ti, end=True, size=size)
+            nxt = order[order.index(ti) + 1] if ti in order and order.index(ti) + 1 < n else None
+            if nxt is not None and not run.cancel.is_set():
+                run.span("open", nxt)
             with self.job_lock:
                 run.seen.add(ti)
                 tp = _tp(job, ti)
@@ -1166,6 +1219,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             if not self._mkv.acquire(timeout=30):
                 raise RuntimeError("The drive is busy with a scan. Choose Rip again in a moment.")
             try:
+                if "on_title_start" in kwargs and order:
+                    run.span("open", order[0])
                 paths = makemkv.rip_titles(self.cfg, job.drive_index, order, job.rip_dir, ripping, cancel, **kwargs)
             finally:
                 self._mkv.release()
@@ -1333,7 +1388,11 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             f = _file(job, ti)
             path = f.path
         self._say(run, 0.0, f"Keeping the chosen languages in title {ti}")
-        hdr.remux_tracks(path, path, job.audio_langs, job.subtitle_langs, self.cfg)
+        run.span("languages", ti)
+        try:
+            hdr.remux_tracks(path, path, job.audio_langs, job.subtitle_langs, self.cfg)
+        finally:
+            run.span("languages", ti, end=True)
         self._say(run, 0.3, f"Checking HDR formats in title {ti}")
         info = hdr.probe(path, self.cfg)
         if info.dolby_vision and info.dv_profile == 7:
@@ -1371,6 +1430,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         def step(phase: str, frac: float, text: str) -> None:
             self._say(run, frac, f"{'Copying' if phase == 'copy' else 'Checking'} title {ti} · {text}")
 
+        run.span("copy", ti)
         try:
             self._copy_one(job, f, run.cancel, run.copy_meter, step)
         except transfer.Cancelled:
@@ -1378,6 +1438,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         except Exception as e:
             with self.job_lock:
                 run.copy_errors.append((ti, e))
+        finally:
+            run.span("copy", ti, end=True)
 
     def _queue_ready(self, job: Job) -> None:
         """Queue every ripped title whose match is now ready; refresh why the others wait. Hold job_lock."""

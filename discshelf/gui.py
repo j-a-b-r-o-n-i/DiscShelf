@@ -40,10 +40,11 @@ try:
     from .classify import SHORT_S
 except ImportError:                                  # the classifier is optional for the window
     SHORT_S = 300
-from .models import Disc, Drive, Episode, HdrPolicy, Job, Match, RippedFile, Sample, Title, TitleProgress
+from .models import Disc, Drive, Episode, HdrPolicy, Job, Match, RippedFile, Sample, Span, Title, TitleProgress
 from .picker import PICKER_STYLE, EpisodePicker
 from . import season as seasonmod
-from . import naming, nasfix
+from . import naming, nasfix, ripstats
+from . import timeline as tl
 from .seasonui import (ClickChip, CompareTitle, ComparePanel, FixOption, FixView, ProblemsBanner, SeasonGrid,
                        WatchChooser, watch_button)
 from .taskbar import TaskbarProgress
@@ -1284,22 +1285,35 @@ class QueueCard(Card):
         self.dual.hide()
         self.lay.addWidget(self.dual)
 
-        # Rip speed since the rip started.
+        # The rip timeline: each title opening and reading, its languages and copy, and the rest estimated.
         self.graph_box = QFrame()
         self.graph_box.setObjectName("note")
         gl = vbox(spacing=6, margins=(12, 10, 12, 10))
         self.speed_now = label("", mono=True)
         self.speed_now.setStyleSheet("font-size: 15px; font-weight: 500;")
         self.speed_sum = label("", "field", wrap=True)
+        self.whole_btn, self.ten_btn = QPushButton("Whole disc"), QPushButton("Last 10 min")
+        self.range_group = QButtonGroup(self)
+        for b in (self.whole_btn, self.ten_btn):
+            b.setObjectName("option")
+            b.setCheckable(True)
+            self.range_group.addButton(b)
+            b.clicked.connect(lambda _c=False: self.refresh_graph())
+        self.whole_btn.setChecked(True)
+        self.speed_now.setWordWrap(True)
         gl.addWidget(self.speed_now)
         gl.addWidget(self.speed_sum)
-        self.graph = LineChart(compact=True, height=56, surface=SIDE)
+        gl.addLayout(hbox(None, self.whole_btn, self.ten_btn, spacing=6))
+        self.graph = tl.RipTimeline()
+        self.graph.picked.connect(self.pick_title)
         gl.addWidget(self.graph)
-        self.graph_start = label("", "field")
-        self.graph_start.setStyleSheet("font-size: 11px;")
-        now = label("now", "field")
-        now.setStyleSheet("font-size: 11px;")
-        gl.addLayout(hbox(self.graph_start, None, now))
+        self.picked_title = tl.NONE
+        self.detail_head = label("")
+        self.detail_head.setStyleSheet("font-weight: 600; font-size: 13px;")
+        self.detail = label("", "soft", wrap=True)
+        self.detail.setStyleSheet("font-size: 13px;")
+        gl.addWidget(self.detail_head)
+        gl.addWidget(self.detail)
         self.graph_box.setLayout(gl)
         self.graph_box.hide()
         self.lay.addWidget(self.graph_box)
@@ -1450,31 +1464,35 @@ class QueueCard(Card):
 
     def refresh_graph(self):
         job, win = self.job, self.win
-        rips = win.samples.get(job.id, {}).get("rip", [])
-        show = win.is_ripping(job) and len(rips) >= 2
-        self.graph_box.setVisible(show)
-        if not show:
+        view = win.rip_view(job) if win.is_ripping(job) else None
+        self.graph_box.setVisible(view is not None)
+        if view is None:
             return
-        xs = [s.t for s in rips]
-        mbs = [s.rate / 1e6 for s in rips]
-        last = rips[-1]
-        avg = sum(s.rate for s in rips) / len(rips)
-        peak = max(s.rate for s in rips)
-        span = xs[-1] - xs[0]
-        self.speed_now.setText(f"{fmt_rate(last.rate)} · {last.rate / BLURAY_1X:.1f}×")
-        self.speed_sum.setText(f"{fmt_gb(last.total)} ripped · avg {fmt_rate(avg)} · peak {fmt_rate(peak)}")
-        mins = max(1, round(span / 60))
-        self.graph_start.setText(f"{mins} min ago")
-        readouts = [f"{fmt_ago(xs[-1] - s.t)}: {fmt_rate(s.rate)} ({s.rate / BLURAY_1X:.1f}×) · "
-                    f"{fmt_gb(s.total)} ripped" for s in rips]
-        low = min(rips, key=lambda s: s.rate)
-        dip = ""
-        if low.rate < 0.75 * avg:
-            dip = f", with a dip about {max(1, round((xs[-1] - low.t) / 60))} minutes ago"
-        summary = (f"Rip speed since the rip started {mins} minutes ago, averaging {fmt_rate(avg)}{dip}. "
-                   f"{fmt_gb(last.total)} ripped so far.")
-        self.graph.set_data(xs, [ChartSeries("Rip speed", ACCENT, mbs, fill=True)], unit="MB/s",
-                            readouts=readouts, summary=summary)
+        spans, est, now, order, ripped = view
+        rips = win.samples.get(job.id, {}).get("rip", [])
+        wall = _dt.datetime.now()
+        self.speed_now.setText(tl.readout(spans, rips, order))
+        self.speed_sum.setText(tl.summary(spans, est, now, ripped))
+        known = {s.title_index for s in spans} | {pl.title_index for pl in (est.planned if est else [])}
+        if self.picked_title not in known:
+            self.picked_title = tl.NONE
+        if self.picked_title != tl.NONE:
+            n = order.index(self.picked_title) + 1 if self.picked_title in order else self.picked_title
+            head, text = tl.title_text(self.picked_title, n, spans, est, now, wall)
+        else:
+            head, text = tl.estimate_text(est, wall)
+        self.detail_head.setText(head)
+        self.detail.setText(text)
+        self.detail_head.setVisible(bool(head))
+        self.detail.setVisible(bool(text))
+        summary = self.speed_sum.text() + (". " + head if head else "")
+        self.graph.set_data(rips, spans, est, now, order, wall=wall, whole=self.whole_btn.isChecked(),
+                            selected=self.picked_title, summary=summary)
+
+    def pick_title(self, ti: int):
+        """A click on the timeline: that title's details, or the estimate again for the same title or none."""
+        self.picked_title = tl.NONE if ti == self.picked_title else ti
+        self.refresh_graph()
 
     def _act(self):
         text = self.action.text()
@@ -6985,6 +7003,8 @@ class MainWindow(QMainWindow):
         self.last_error: tuple[str, str] | None = None
         self._boxes = []
         self.samples: dict[str, dict[str, list[Sample]]] = {}   # job id -> kind -> samples, this session only
+        self.spans: dict[str, dict[tuple[str, int], Span]] = {}   # job id -> the rip timeline, this session only
+        self.clock0: dict[str, float] = {}       # job id -> time.monotonic() at the rip's time 0
         self.taskbar = TaskbarProgress(DESKTOP_ID)
         self._taskbar_max: dict[str, float] = {}
         self._attention_seen: set[str] = set()
@@ -7282,8 +7302,31 @@ class MainWindow(QMainWindow):
         return bool(ok), why or ""
 
     def got_sample(self, job_id: str, sample) -> None:
-        self.samples.setdefault(job_id, {}).setdefault(sample.kind, []).append(sample)
+        if isinstance(sample, Span):
+            self.spans.setdefault(job_id, {})[(sample.kind, sample.title_index)] = sample
+            at = sample.end if sample.end is not None else sample.start
+        else:
+            self.samples.setdefault(job_id, {}).setdefault(sample.kind, []).append(sample)
+            at = sample.t
+        # The worker and the window share time.monotonic(); this finds the rip's time 0 on it.
+        self.clock0[job_id] = min(self.clock0.get(job_id, math.inf), time.monotonic() - at)
         self.schedule_refresh()
+
+    def rip_view(self, job: Job):
+        """(spans, estimate, now, order, bytes ripped) for the rip timeline, or None before any span."""
+        spans = list(self.spans.get(job.id, {}).values())
+        if not spans or job.id not in self.clock0:
+            return None
+        now = time.monotonic() - self.clock0[job.id]
+        tp = [p for p in self.progress_of(job) if p.state != "skipped"]
+        order = [p.title_index for p in tp]
+        sizes = {t.index: t.size_bytes for t in job.titles}
+        ripped = {p.title_index: p.ripped_bytes for p in tp}
+        est = ripstats.estimate(order, sizes, spans, now, ripped) if self.is_ripping(job) else None
+        read = ripstats.timings(spans)
+        total = sum(t.bytes for t in read.values() if t.read_end is not None) + \
+            sum(ripped.get(t.title_index, 0) for t in read.values() if t.read_end is None and t.read_start is not None)
+        return spans, est, now, order, total
 
     def schedule_refresh(self) -> None:
         """Progress and samples arrive many times a second; redraw at most every 80 ms."""
@@ -7312,6 +7355,11 @@ class MainWindow(QMainWindow):
         got = self.samples.get(job.id, {})
         tp = [p for p in self.progress_of(job) if p.state != "skipped"]
         total = sum(p.total_bytes for p in tp)
+        view = self.rip_view(job) if self.is_ripping(job) else None
+        if view is not None and view[1] is not None:
+            # The last title still has to be copied after the rip.
+            last = view[1].per_title if job.copy_mode == "per_title" else 0
+            return view[1].seconds + last / (self.last_rate(job, "copy") or 110e6)
         if self.is_ripping(job) and got.get("rip") and total:
             rate = sum(s.rate for s in got["rip"][-10:]) / len(got["rip"][-10:])
             ripped = sum(p.ripped_bytes for p in tp)
@@ -7383,6 +7431,8 @@ class MainWindow(QMainWindow):
         self.running["rip"] = job
         self.started.pop(job.id, None)
         self.samples[job.id] = {"rip": [], "copy": []}
+        self.spans[job.id] = {}
+        self.clock0.pop(job.id, None)
         self._taskbar_max.pop(job.id, None)
         self.refresh_jobs()
 

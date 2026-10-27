@@ -165,6 +165,16 @@ start from the beginning. Inside the Flatpak, mpv or VLC on the host is started 
   asked to scan just that folder.
 - **Speed and time left** show in the progress text, with graphs on the Rip and Copy
   screens and progress on the task-manager icon.
+- **The rip timeline** on a disc's card shows each title in turn. MakeMKV is started once
+  per title and opens the disc again each time (about 40 s on a Blu-ray), so that time is
+  drawn as a hatched band with no speed line. The reading speed is averaged over 20 s,
+  because MakeMKV writes in 32 MB blocks a few seconds apart. Below it, rows show when each
+  title had its languages kept and when it was copied to the NAS. A title read below 75% of
+  the speed of the titles around it gets a red marker. Click a title for its times.
+- **The time left** is worked out per title from the disc's own titles so far: the average
+  time to open the disc, the speed while reading over the last 5 titles, and the sizes
+  MakeMKV actually writes, which on Blu-rays are often about half its own estimate. The
+  titles still to rip are drawn dashed after "now", up to when the rip should end.
 - **Plex sign-in** uses Plex's PIN flow. The token is stored in
   `~/.config/disc-shelf/secrets.json`, readable only by you.
 

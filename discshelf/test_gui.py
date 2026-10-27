@@ -199,11 +199,26 @@ def run():
 
     check(wait(locked_row, 20), "no title showed as on the NAS with its match locked")
     card = win.rip.queue_cards.get(job.id)
-    check(wait(lambda: card is not None and len(card.graph.xs) >= 2 and not card.dual.isHidden()), "queue card graph")
+    check(wait(lambda: card is not None and len(card.graph.samples) >= 2 and not card.dual.isHidden()
+               and any(s.kind == "read" and s.end is not None for s in card.graph.spans)), "queue card timeline")
     if card is not None and win.is_ripping(job):
         check(card.bar.isHidden() and not card.dual.isHidden(), "the queue card doesn't show separate Rip and Copy bars")
         check(not card.graph_box.isHidden() and "GB ripped" in card.speed_sum.text(), f"graph: {card.speed_sum.text()}")
-        check(card.graph.accessibleName().startswith("Rip speed"), "the rip graph has no text summary")
+        check("GB ripped" in card.graph.accessibleDescription(), "the rip timeline has no text summary")
+        check(card.graph.est is not None and card.detail_head.text().startswith("Ripping done in about "),
+              f"no estimate under the timeline: {card.detail_head.text()!r}")
+        kinds = {s.kind for s in card.graph.spans}
+        check({"open", "read", "languages", "copy"} <= kinds, f"timeline steps: {kinds}")
+        card.graph.repaint()
+        first = next(iter(card.graph.boxes), None)
+        if first is not None:
+            a, b = card.graph.boxes[first]
+            card.graph.picked.emit(card.graph.title_at((a + b) / 2))
+            check(card.detail_head.text().startswith("Title 1,"), f"clicking title 1: {card.detail_head.text()!r}")
+            card.graph.picked.emit(first)
+            check(card.detail_head.text().startswith("Ripping done in about "), "a second click doesn't go back to the estimate")
+        card.ten_btn.click()
+        check(not card.graph.whole, "Last 10 min didn't change the range")
     check(wait(lambda: not win.busy("rip") and job.stage == "done", 30), f"the TV rip didn't finish: {job.stage}")
     app.processEvents()
     shown = [p.get("progress") for p in sent if p.get("progress-visible")]

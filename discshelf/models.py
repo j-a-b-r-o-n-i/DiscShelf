@@ -154,6 +154,17 @@ class Sample:
 
 
 @dataclass
+class Span:
+    """One step of one title on the rip timeline, kept in memory like Sample. A span whose end
+    is None is still going."""
+    kind: str                    # "open" (MakeMKV opening the disc) | "read" | "languages" | "copy"
+    title_index: int
+    start: float                 # seconds since the rip started, the clock Sample.t uses
+    end: float | None = None
+    bytes: int = 0               # for "read": what MakeMKV wrote, before the languages step
+
+
+@dataclass
 class RippedFile:
     title_index: int
     path: str                    # the MKV in the local rip folder

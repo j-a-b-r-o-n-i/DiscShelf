@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The rip graph is now a timeline of each title: MakeMKV opening the disc, reading (with
+  the speed averaged over 20 s), keeping languages and copying to the NAS, with slow titles
+  marked and the rest of the rip drawn as an estimate. The time left is worked out from
+  this disc's own titles, so it no longer swings between minutes and hours.
+- Every second title of a disc was mistaken for the previous title's temporary file while
+  that one had its languages kept. It showed spikes of about 100 MB/s on the rip graph, and
+  the title wasn't matched or copied until the whole disc had ripped.
 - Two titles matched to the same episode are flagged on the Match page instead of being
   copied as "S01E20 (2)". Both wait until you compare them and keep one, keep both as
   versions of the episode, or save one as an extra.
