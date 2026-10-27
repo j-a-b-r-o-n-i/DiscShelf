@@ -295,7 +295,7 @@ def run():
     win.match.update_actions()
     check(win.match.cards_btn.isVisibleTo(win) and win.match.cards_btn.isEnabled(), "no Read title cards button")
     ctl.delay = 0.4
-    win.match.read_cards()
+    win.match.cards_btn.click()     # through the button, as clicked(bool) once passed False as the titles to read
     check(wait(lambda: win.match.cards_box.isVisibleTo(win) and "Reading title cards" in win.match.cards_title.text()),
           f"no reading status: {win.match.cards_title.text()!r}")
     check(wait(lambda: any(c[0].text().startswith("Reading") for c in win.match.card_cells.values())),

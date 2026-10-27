@@ -1569,7 +1569,7 @@ class RipPage(QWidget):
         self.refresh_btn = button("Refresh drives")
         self.refresh_btn.clicked.connect(win.refresh_drives)
         self.scan_btn = button("Scan again")
-        self.scan_btn.clicked.connect(self.scan)
+        self.scan_btn.clicked.connect(lambda: self.scan())
         col.addLayout(hbox(label("Drive", "muted"), self.drive_combo, self.refresh_btn, self.scan_btn))
 
         # Disc card
@@ -2262,7 +2262,7 @@ class MatchPage(QWidget):
         self.list_btn.clicked.connect(self.enter_list)
         self.cards_btn = button("Read title cards")
         self.cards_btn.setToolTip("Match each ripped title by reading the episode name shown near its start.")
-        self.cards_btn.clicked.connect(self.read_cards)
+        self.cards_btn.clicked.connect(lambda: self.read_cards())
         show_w = QWidget()
         show_w.setLayout(hbox(self.show_combo, self.find_btn, spacing=8))
         self.show_field = field("Show", show_w)
@@ -6417,7 +6417,7 @@ class DiscInfoPage(QWidget):
         self.drive_combo.setMinimumContentsLength(40)
         self.drive_combo.setAccessibleName("Drive")
         self.read_btn = button("Read disc info", primary=True)
-        self.read_btn.clicked.connect(self.read)
+        self.read_btn.clicked.connect(lambda: self.read())
         col.addLayout(hbox(label("Drive", "muted"), self.drive_combo, self.read_btn, None))
         self.body = vbox(spacing=20)
         col.addLayout(self.body)
