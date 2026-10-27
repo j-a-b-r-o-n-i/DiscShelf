@@ -29,6 +29,7 @@ import time
 from typing import Callable
 
 from . import av1, caseocr, classify, config, discdb, discinfo, hdr, makemkv, match, naming, ocr, titlecard, transfer, watch
+from . import play, season
 from .config import Config
 from .jobs import JobStore, now_iso
 from .models import Disc, Drive, EncodeJob, Episode, Job, Match, RippedFile, Sample, Title, TitleProgress
@@ -142,6 +143,8 @@ def _mark_waiting(tp: TitleProgress, m: Match | None, card_pending: bool = False
         state, note = "skipped", "It's set to skip, so it isn't copied."
     elif m is None:
         state, note = "waiting_match", "It waits until it's matched to an episode, the film or an extra."
+    elif m.held:
+        state, note = "waiting_match", f"{m.held} It waits until that's settled on the Match page."
     else:
         state, note = "waiting_match", "It waits until you confirm its match."
     changed = (tp.state, tp.note) != (state, note)
@@ -267,6 +270,7 @@ class CardStatus:
     text: str = ""               # what the card read, as OCR saw it
     sure: bool = False           # the card names one episode clearly
     note: str = ""               # why it failed
+    t: float | None = None       # seconds into the title where the card naming its episode was on screen
 
 
 @dataclass
@@ -277,6 +281,7 @@ class CheckRow:
     note: str                    # the match's note, one sentence
     current: Episode | None      # the episode it's matched to now
     options: list[tuple[Episode, str]]   # candidate episodes, current first, each with a one-sentence reason
+    held: str = ""               # it shares its episode with another title (Match.held); settled on the Match page
 
 
 @dataclass
@@ -629,6 +634,14 @@ class QueueViews:
             parts.append(f"Ripped {_plural(len(titles), 'title')}. Match them to episodes next.")
         elif wanted and (len(wanted) > 1 or tv):
             parts.append(f"{on_nas} of {len(wanted)} {'episodes' if tv else 'titles'} in Plex.")
+        held = ""
+        if any(m.held for m in job.matches) and hasattr(self, "season_others"):
+            problems = season.find_problems(season.title_holders(job), self.season_others(job)[0],
+                                            self._season_names(job))
+            held = season.held_summary(job.matches, problems)
+        if held:
+            parts.append(held)
+        checks = [c for c in checks if not c.held]
         if checks:
             n = len(checks)
             if all(c.read for c in checks):
@@ -691,7 +704,8 @@ class QueueViews:
             scored.sort(key=lambda x: x[:3])
             for *_, e, word in scored:
                 add(e, f"Its name has “{word}”, which the title card read.")
-        return CheckRow(title_index=ti, read=read, note=note, current=current, options=options)
+        return CheckRow(title_index=ti, read=read, note=note, current=current, options=options,
+                        held=m.held if m is not None else "")
 
     def _season_views(self, jobs: list[Job], running: set[str],
                       episodes: dict[int, list[Episode] | None]) -> list[SeasonView]:
@@ -806,7 +820,7 @@ def card_workers() -> int:
     return max(1, min(4, (os.cpu_count() or 2) // 8))
 
 
-class Controller(QueueViews):
+class Controller(QueueViews, season.SeasonChecks):
     def __init__(self, cfg: Config, store: JobStore | None = None, tvmaze: TvMaze | None = None,
                  discdb_client: discdb.TheDiscDb | None = None):
         self.cfg = cfg
@@ -1448,18 +1462,60 @@ class Controller(QueueViews):
         with self.job_lock:
             return {ti: _copy.copy(st) for ti, st in self._card_state.get(job.id, {}).items()}
 
-    def read_cards(self, job: Job, progress: Progress | None = None, cancel: threading.Event | None = None) -> int:
+    def card_reads(self, job: Job, titles: list[int]) -> dict[int, tuple[str, float]]:
+        """What each of these titles' cards reads on its own, as (text, seconds in), for comparing
+        two titles that hold one episode. Read jointly, text both show is taken for the show's
+        own and dropped, so each title is judged alone here."""
+        with self.job_lock:
+            readings = {ti: r for ti, r in self._cards.get(job.id, {}).items() if ti in titles}
+        if not readings or job.show_id is None:
+            return {}
+        episodes = self._show_episodes(job.show_id) or []
+        out = {}
+        for ti, r in readings.items():
+            cm = titlecard.pick_episodes({ti: r}, episodes).get(ti)
+            if cm is not None and cm.episode is not None and cm.text:
+                out[ti] = (cm.text, cm.t)
+        return out
+
+    # --- watching a title ----------------------------------------------------
+
+    def playable(self, job: Job, ti: int) -> str:
+        """A file that plays this title: the local rip, else its checked copy on the NAS; "" before it's ripped."""
+        return play.playable(job, ti)
+
+    def play(self, path: str, start_s: float = 0.0) -> str:
+        """Open the file in a video player. Returns "" or what went wrong, in a sentence."""
+        return play.launch(path, start_s)
+
+    def player(self) -> "play.Player | None":
+        return play.find_player()
+
+    def _library_rels(self, job: Job) -> list[str]:
+        if not job.destination or job.season is None:
+            return []
+        return season.library_files(job.destination, job.show, job.year, job.season)
+
+    def read_cards(self, job: Job, progress: Progress | None = None, cancel: threading.Event | None = None,
+                   only: set[int] | None = None) -> int:
         """Read the title cards of a disc that's already ripped, several titles at once, and
         match from them as each one finishes. Returns how many titles got a match from their
-        card. Setting cancel stops before the titles not started yet."""
-        files = [(f.title_index, f.path) for f in job.files if f.path and os.path.isfile(f.path)]
+        card. Setting cancel stops before the titles not started yet. only limits it to those
+        titles (two that hold the same episode), keeping what the others' cards read."""
+        files = [(f.title_index, f.path) for f in job.files if f.path and os.path.isfile(f.path)
+                 and (only is None or f.title_index in only)]
         if not files:
             raise ValueError("No ripped titles are left on this computer to read.")
         if not ocr.engine():
             raise RuntimeError("No OCR is installed. Run make install-disc-shelf to add it.")
         with self.job_lock:
-            self._cards.pop(job.id, None)
-            self._card_state[job.id] = {ti: CardStatus() for ti, _ in files}
+            if only is None:
+                self._cards.pop(job.id, None)
+                self._card_state[job.id] = {ti: CardStatus() for ti, _ in files}
+            else:
+                for ti, _ in files:
+                    self._cards.get(job.id, {}).pop(ti, None)
+                    self._card_state.setdefault(job.id, {})[ti] = CardStatus()
         n, done = len(files), 0
         if progress:
             progress(0.0, f"Reading title cards · 0 of {n}")
@@ -1508,6 +1564,7 @@ class Controller(QueueViews):
                 st = self._card_state.setdefault(job.id, {}).setdefault(ti, CardStatus(state="read"))
                 if st.state == "read" or st.state == "none":
                     st.text, st.sure = cm.text, cm.sure
+                    st.t = cm.t if cm.episode is not None else None
                     st.state = "read" if cm.episode is not None else "none"
             new = {m.title_index: m for m in titlecard.card_matches(picks, job.titles, episodes)
                    if m.target == "episode" and m.title_index in readings}
@@ -1643,6 +1700,7 @@ class Controller(QueueViews):
             if show_id is None:
                 raise ValueError("Pick the show from the search results first.")
             job.show_id = show_id
+            self.season_others(job, refresh=True)
             known = self._discdb_matches(job, titles, self.tvmaze.episodes(show_id, None))
             if known:
                 return self.update_matches(job, known)
@@ -1686,6 +1744,7 @@ class Controller(QueueViews):
             chosen = {tp.title_index for tp in job.titles_progress} or {f.title_index for f in job.files}
             titles = [t for t in job.titles if not chosen or t.index in chosen]
         job.show_id = show_id
+        self.season_others(job, refresh=True)
         episodes = self.tvmaze.episodes(show_id, None)
         matches = match.match_list(titles, episodes, names)
         for m in matches:
@@ -1713,6 +1772,7 @@ class Controller(QueueViews):
                 if ti in frozen or ti in old:
                     out.append(_copy.deepcopy(frozen[ti]) if ti in frozen else old[ti])
             job.matches = out
+            self.apply_season(job)
             self._save(job)
             self._queue_ready(job)
             return job.matches
@@ -1747,7 +1807,7 @@ class Controller(QueueViews):
         rels: list[str | None] = []
         for ti in order:
             try:
-                rels.append(naming.relpath_for(job, by[ti], layout))
+                rels.append(season.with_version(naming.relpath_for(job, by[ti], layout), by[ti]))
             except ValueError:
                 if strict:
                     raise
@@ -1846,6 +1906,10 @@ class Controller(QueueViews):
                 raise RuntimeError("This disc is still ripping; its titles are copied as each one finishes.")
             files = self.plan_paths(job)
             todo = [f for f in files if f.state != "verified"]
+            held = [m for m in job.matches if m.held and any(f.title_index == m.title_index for f in todo)]
+        if held:
+            raise ValueError(f"{held[0].held} Settle it at the top of the Match page first: compare the "
+                             "titles, then keep one, keep both as versions, or save one as an extra.")
         if not files:
             raise ValueError("Nothing to copy. Match at least one title to an episode, the film or an extra.")
         if todo and not os.path.isdir(job.destination):

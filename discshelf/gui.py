@@ -22,6 +22,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontDatabase, QFontMetrics, QIcon, QPainter,
@@ -41,6 +42,8 @@ except ImportError:                                  # the classifier is optiona
     SHORT_S = 300
 from .models import Disc, Drive, Episode, HdrPolicy, Job, Match, RippedFile, Sample, Title, TitleProgress
 from .picker import PICKER_STYLE, EpisodePicker
+from . import season as seasonmod
+from .seasonui import CompareTitle, ComparePanel, ProblemsBanner, SeasonGrid, WatchChooser, watch_button
 from .taskbar import TaskbarProgress
 
 try:
@@ -2226,6 +2229,24 @@ class MatchPage(QWidget):
                          "muted", wrap=True)
         col.addLayout(vbox(self.meta, self.h1, self.sub, spacing=6))
 
+        # Problems: an episode on two titles of this disc, or already on another disc or in the library.
+        self.season_st = None                 # season.SeasonStatus of the open job
+        self.compare_key = ""                 # the problem being compared, "" for none
+        self.compare_reads: dict[int, tuple[str, float]] = {}
+        self.problems = ProblemsBanner()
+        self.problems.compare.connect(self.open_compare)
+        self.problems.hide()
+        col.addWidget(self.problems)
+        self.compare = ComparePanel()
+        self.compare.closed.connect(lambda: self.open_compare(""))
+        self.compare.keep.connect(lambda ti: self.fix("keep", ti))
+        self.compare.version.connect(lambda ti: self.fix("version", ti))
+        self.compare.extra.connect(lambda ti: self.fix("extra", ti))
+        self.compare.pick.connect(self.open_picker)
+        self.compare.watch.connect(self.watch_compared)
+        self.compare.read_cards.connect(self.read_compared_cards)
+        col.addWidget(self.compare)
+
         # Fields
         self.show_combo = QComboBox()
         self.show_combo.setEditable(True)
@@ -2326,7 +2347,7 @@ class MatchPage(QWidget):
         mcard.lay.addWidget(head)
         self.table = plain_table(["Title on disc", "Length", "Episode", "Listed", "Match", "Progress", "Title card"])
         self.table.horizontalHeader().moveSection(6, 3)    # shown next to the episode it read
-        for c, w in enumerate((130, 80, 350, 80, 130, 200, 210)):
+        for c, w in enumerate((176, 80, 350, 80, 150, 200, 210)):
             self.table.setColumnWidth(c, w)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table_empty = label("", "muted", wrap=True)
@@ -2339,7 +2360,15 @@ class MatchPage(QWidget):
         self.notes_text.setStyleSheet("color: #E2D3B5; font-size: 13px;")
         self.notes.setLayout(vbox(self.notes_text, margins=(20, 10, 20, 14)))
         mcard.lay.addWidget(self.notes)
+        self.season_note = label("", "small", wrap=True)
+        self.season_note.setContentsMargins(20, 0, 20, 12)
+        self.season_note.hide()
+        mcard.lay.addWidget(self.season_note)
         col.addWidget(mcard)
+        self.grid = SeasonGrid()
+        self.grid.clicked.connect(self.grid_clicked)
+        self.grid.hide()
+        col.addWidget(self.grid)
         self.prog_cells: dict[int, tuple[QLabel, QProgressBar]] = {}
         self._locked: set[int] = set()
         self.preview: list[tuple[int, str]] = []
@@ -2457,7 +2486,12 @@ class MatchPage(QWidget):
         self.stack.setCurrentIndex(1)
         self.fill_dest()
         self.fill_fields()
+        if not same:
+            self.compare_key, self.compare_reads = "", {}
+            self.season_st = None
+            self.set_season_note("")
         self.fill_table()
+        self.refresh_season()
         if same:
             return
         film = self.layout() == "movie"
@@ -2522,8 +2556,10 @@ class MatchPage(QWidget):
                                               "Listed", "Match", "Progress", "Title card"])
         self.table.setColumnHidden(3, film)
 
-    def badge_cell(self, m: Match) -> QWidget:
-        if m.target == "skip":
+    def badge_cell(self, m: Match, dup: str = "") -> QWidget:
+        if dup:
+            c = chip(dup, "bad")
+        elif m.target == "skip":
             c = chip("Skipped", "plain")
         elif m.confidence == "check":
             c = chip("Check", "warn")
@@ -2533,8 +2569,10 @@ class MatchPage(QWidget):
             c = chip("Extra", "plain")
         else:
             c = chip("Close match", "good")
-        if m.confidence == "check" and m.confirmed and m.target != "skip":
+        if m.confidence == "check" and m.confirmed and m.target != "skip" and not dup:
             set_chip(c, "Confirmed", "good")
+        if m.version and m.target == "episode" and not dup:
+            set_chip(c, m.version, "info")
         w = QWidget()
         lay = hbox(spacing=10, margins=(8, 4, 12, 4))
         lay.addWidget(c, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -2548,7 +2586,7 @@ class MatchPage(QWidget):
         """What the table shows of each match, to notice matches changed in the background."""
         with self.win.lock():
             return tuple((m.title_index, m.target, m.episode and (m.episode.season, m.episode.number), m.episode_end,
-                          m.confidence, m.confirmed, m.source) for m in self.job.matches)
+                          m.confidence, m.confirmed, m.source, m.held, m.version) for m in self.job.matches)
 
     def fill_table(self):
         job = self.job
@@ -2559,6 +2597,9 @@ class MatchPage(QWidget):
         mono = QFont(self.win.mono)
         film = self.layout() == "movie"
         eps = [] if film else self.season_eps()
+        self.season_st = None if film else self.season_state()
+        st = self.season_st
+        dup_with = self.dup_partners()
         rows = self.rows()
         used = {(x.episode.season, x.episode.number): x.title_index for x in rows if x.target == "episode" and x.episode}
         prog = {p.title_index: p for p in self.win.progress_of(job)}
@@ -2574,7 +2615,8 @@ class MatchPage(QWidget):
             t.insertRow(r)
             title = self.title_of(m.title_index)
             src = title.source if title and title.source else f"Title {m.title_index}"
-            t.setItem(r, 0, item(src, mono))
+            t.setItem(r, 0, item("", mono))
+            t.setCellWidget(r, 0, self.title_cell(m.title_index, src, cards.get(m.title_index)))
             t.setItem(r, 1, item(fmt_len(title.duration_s) if title else "—", mono))
             locked = m.title_index in self._locked
             want = m.target if m.target in ("feature", "extra", "skip") else None
@@ -2600,7 +2642,9 @@ class MatchPage(QWidget):
                                   suggestions=self.suggestions_for(m, eps), season=self.picker_season(),
                                   extra_label=f"Extra · {m.extra_name}" if m.target == "extra" else "",
                                   double=(m.episode, m.episode_end) if m.target == "episode" and m.episode
-                                  and m.episode_end else None, warn=warn)
+                                  and m.episode_end else None, warn=warn,
+                                  taken=st.taken if st is not None else None,
+                                  group_season=job.season if st is not None else None)
                 combo.setProperty("prev_data", want or "skip")
                 combo.picked.connect(lambda data, m=m, c=combo: self.pick(m, c, data))
             combo.setAccessibleName(f"Episode for {src}")
@@ -2610,6 +2654,11 @@ class MatchPage(QWidget):
             combo.setEnabled(not locked)
             ep_cell = QWidget()
             el = vbox(combo, spacing=4, margins=(8, 6, 8, 6))
+            if m.title_index in dup_with:
+                dup = label(dup_with[m.title_index][1], wrap=True)
+                dup.setStyleSheet("color: #FFB4AE; font-size: 12px;")
+                el.addWidget(dup)
+                combo.setProperty("warn", "true")
             if locked:
                 el.addWidget(label("Already on the NAS, so the match is locked.", "field"))
                 combo.setToolTip("Already on the NAS, so the match is locked.")
@@ -2617,10 +2666,10 @@ class MatchPage(QWidget):
             t.setCellWidget(r, 2, ep_cell)
             listed = f"{m.episode.runtime_min} min" if m.target == "episode" and m.episode and m.episode.runtime_min else "—"
             t.setItem(r, 3, item(listed, mono, muted=True))
-            t.setCellWidget(r, 4, self.badge_cell(m))
+            t.setCellWidget(r, 4, self.badge_cell(m, dup_with.get(m.title_index, ("", ""))[0]))
             t.setCellWidget(r, 5, self.progress_cell(m.title_index, prog.get(m.title_index)))
             t.setCellWidget(r, 6, self.card_cell(m.title_index, cards.get(m.title_index)))
-            t.setRowHeight(r, 76 if locked else 56)
+            t.setRowHeight(r, (76 if locked else 56) + (22 if m.title_index in dup_with else 0))
             if m.note and m.target != "skip" and not (m.confirmed and m.confidence == "check"):
                 tail = ""
                 if job.stage == "rip" and self.copy_mode() in OVERLAP and m.confidence == "check" and not locked:
@@ -2636,6 +2685,8 @@ class MatchPage(QWidget):
             self.table_empty.setText("Looking up the episodes…" if busy else
                                      ("Find the show above to match its episodes." if not film else
                                       "No titles were ripped from this disc."))
+        self.fill_problems()
+        self.grid.set_status(st if st is not None and rows else None)
         self.update_counts()
 
     def progress_cell(self, idx: int, p: TitleProgress | None) -> QWidget:
@@ -2788,11 +2839,15 @@ class MatchPage(QWidget):
             left = self.titles_left()
             n = len(left) if left is not None else len(self.plan)
             self.confirm_btn.setText(f"Confirm and copy {plural(n, 'file')}")
-            self.confirm_btn.setEnabled(n > 0 and not self.plan_error and not busy and job.stage == "match")
+            held = self.held_titles()
+            self.confirm_btn.setEnabled(n > 0 and not self.plan_error and not busy and job.stage == "match"
+                                        and not held)
             self.confirm_btn.setToolTip("Another copy is running. This one can start when it finishes."
                                         if self.win.busy("copy") else "")
             if not self.saved.property("pinned"):
-                self.saved.setText("")
+                self.saved.setText(f"{seasonmod._titles_text(held)} {'shares its' if len(held) == 1 else 'share an'} "
+                                   "episode with another title. Settle the problems at the top first."
+                                   if held else "")
         self.find_btn.setEnabled(not self.win.busy("search"))
         self.find_btn.setText("Searching…" if self.win.busy("search") else "Find show")
         self.list_btn.setVisible(self.layout() != "movie")
@@ -2854,6 +2909,7 @@ class MatchPage(QWidget):
             ep = next((e for e in eps if (e.season, e.number) == (season, num)), None)
             new.target, new.episode, new.episode_end = "episode", ep, end
         new.confidence, new.note, new.confirmed, new.source = "manual", "", False, "manual"
+        new.held, new.held_was, new.version = "", "", ""
         with self.win.lock():
             matches = [new if x.title_index == m.title_index else x for x in self.job.matches]
         self.set_matches(self.job, matches)
@@ -2969,6 +3025,7 @@ class MatchPage(QWidget):
             self.set_matches(job, list(matches))
             if self.job is job:
                 self.fill_table()
+                self.refresh_season()
 
         self.win.run_task("suggest", lambda _p: self.win.ctl.suggest_matches(job, sid), ok=done,
                           title="Couldn't match the titles",
@@ -3015,20 +3072,26 @@ class MatchPage(QWidget):
                           next_step="Check the names against the case, or pick the episodes by hand.")
         self.fill_table()
 
-    def read_cards(self):
+    def read_cards(self, only: set[int] | None = None):
         job = self.job
         if job is None or job.id not in self.show_ids:
             return
         job.show_id = self.show_ids[job.id]
 
         def done(n):
-            self.set_saved(f"Matched {plural(n, 'title')} from {'its' if n == 1 else 'their'} title cards."
-                           if n else "No title card could be read. Enter the episode list from the case instead.")
+            if only is not None:
+                self.set_season_note("")
+            else:
+                self.set_saved(f"Matched {plural(n, 'title')} from {'its' if n == 1 else 'their'} title cards."
+                               if n else "No title card could be read. Enter the episode list from the case instead.")
             if self.job is job:
+                self.compare_reads = {}
                 self.fill_table()
 
         cancel = self.cards_cancel = threading.Event()
-        self.win.run_task("cards", lambda p: self.win.ctl.read_cards(job, p, cancel), ok=done,
+        read = (lambda p: self.win.ctl.read_cards(job, p, cancel)) if only is None else \
+            (lambda p: self.win.ctl.read_cards(job, p, cancel, only=set(only)))
+        self.win.run_task("cards", read, ok=done,
                           title="Couldn't read the title cards",
                           next_step="Enter the episode list from the case instead.",
                           done=self.refresh_cards)
@@ -3075,6 +3138,8 @@ class MatchPage(QWidget):
     def set_card_cell(self, ti: int, st) -> None:
         text, bar = self.card_cells[ti]
         words, colour = self.card_text(st)
+        if st is None and not self.win.busy("cards"):
+            words = "Not read"      # only some titles were read (two being compared)
         text.setText(QFontMetrics(text.font()).elidedText(words, Qt.TextElideMode.ElideRight, 190))
         text.setToolTip(words)
         mono = st is not None and st.state == "read" and bool(st.text)
@@ -3159,6 +3224,316 @@ class MatchPage(QWidget):
             f"{sq('#2A2F34')} Waiting: {waiting}")
         self.cards_box.show()
         self.win.update_taskbar()
+
+    # -- the season: problems, compare, grid, Watch -------------------------
+    def season_state(self):
+        """What the last look at the season found, with this disc's matches as they are now. Never
+        reads the disk; refresh_season() looks at the other discs and the library again."""
+        get = getattr(self.win.ctl, "season_status", None)
+        if get is None or self.job is None:
+            return None
+        try:
+            return get(self.job)
+        except Exception:  # noqa: BLE001 -- the season view is a help; matching works without it
+            return None
+
+    def refresh_season(self):
+        job = self.job
+        get = getattr(self.win.ctl, "season_status", None)
+        if job is None or get is None or self.layout() == "movie" or job.season is None:
+            return
+
+        def done(_st):
+            if self.job is job:
+                self.fill_table()
+
+        self.win.run_task("season", lambda _p: get(job, refresh=True), ok=done, quiet=True)
+
+    def held_titles(self) -> list[int]:
+        with self.win.lock():
+            return sorted(m.title_index for m in self.rows() if m.held and m.title_index not in self._locked)
+
+    def dup_partners(self) -> dict[int, tuple[str, str]]:
+        """For each title of this disc in a problem: (chip text, the sentence under its episode)."""
+        st = self.season_st
+        out: dict[int, tuple[str, str]] = {}
+        for p in (st.problems if st is not None else []):
+            for ti in p.titles:
+                on = [f"title {t}" for t in p.titles if t != ti] + [o.phrase() for o in p.others if o.where != "library"]
+                lib = any(o.where == "library" for o in p.others)
+                chip_text = f"Also {on[0]}" if on else "In the library"
+                if len(on) + lib > 1:
+                    chip_text += f" +{len(on) + lib - 1}"
+                where = seasonmod._and(([f"on {seasonmod._and(on)}"] if on else []) + (["in the library"] if lib else []))
+                out[ti] = (chip_text, f"{p.name or p.code} is also {where}.")
+        return out
+
+    def problem(self, key: str | None = None):
+        key = self.compare_key if key is None else key
+        st = self.season_st
+        return next((p for p in st.problems if p.key == key), None) if st is not None and key else None
+
+    def fill_problems(self):
+        st = self.season_st
+        if st is None or not st.problems or self.layout() == "movie":
+            self.problems.hide()
+            self.compare.hide()
+            return
+        items = []
+        for p in st.problems:
+            held = [ti for ti in p.titles if ti not in self._locked]
+            if held:
+                effect = (f"{seasonmod._titles_text(held)} {'waits' if len(held) == 1 else 'wait'} until this is "
+                          "settled, so nothing is copied under the wrong name.")
+            else:
+                effect = ("Both are already on the NAS, so their matches are locked." if len(p.titles) > 1 else
+                          "It's already on the NAS, so its match is locked.")
+            items.append((p.key, p.text, effect))
+        if self.compare_key and self.problem() is None:
+            self.compare_key = ""
+        self.problems.set_problems(items, self.compare_key)
+        self.fill_compare()
+
+    def open_compare(self, key: str):
+        self.compare_key = key
+        self.compare_reads = {}
+        self.fill_problems()
+        if key:
+            scroll = self.stack.widget(1)
+            if isinstance(scroll, QScrollArea):
+                scroll.ensureWidgetVisible(self.compare, 0, 40)
+
+    SOURCE_WORDS = {"discdb": "TheDiscDB's record of this disc", "card": "Its title card",
+                    "list": "The episode list from the case", "runtime": "Its running time, a guess",
+                    "manual": "You picked it"}
+
+    def card_time(self, ti: int, st=None) -> float | None:
+        """Seconds into the title where its card names the episode, when it was read."""
+        if ti in self.compare_reads:
+            return self.compare_reads[ti][1]
+        st = st if st is not None else self.card_status().get(ti)
+        return getattr(st, "t", None) if st is not None and st.state == "read" else None
+
+    def playable(self, ti: int) -> str:
+        get = getattr(self.win.ctl, "playable", None)
+        if get is None or self.job is None:
+            return ""
+        with self.win.lock():
+            return get(self.job, ti) or ""
+
+    def watch_tip(self, path: str, card_t: float | None) -> str:
+        if not path:
+            return "Available once the title is ripped"
+        where = "the copy on the NAS" if self.job and self.job.destination and \
+            path.startswith(self.job.destination.rstrip("/") + "/") else "the ripped file"
+        if card_t is not None:
+            return f"Watch {where}, from the title card ({fmt_len(int(card_t))}) or the beginning"
+        return f"Watch {where} from the beginning"
+
+    def title_cell(self, ti: int, src: str, st) -> QWidget:
+        path = self.playable(ti)
+        b = watch_button()
+        b.setEnabled(bool(path) and hasattr(self.win.ctl, "play"))
+        b.setToolTip(self.watch_tip(path, self.card_time(ti, st)))
+        b.setAccessibleName(f"Watch title {ti}")
+        b.clicked.connect(lambda _c=False, ti=ti: self.watch(ti))
+        if not path:
+            # A disabled button shows no tooltip, so the cell carries it too.
+            b.setToolTip("")
+        w = QWidget()
+        text = label(src, mono=True)
+        lay = hbox(b, text, None, spacing=8, margins=(8, 0, 4, 0))
+        w.setLayout(lay)
+        w.setToolTip("" if path else "Watch is available once the title is ripped")
+        return w
+
+    def watch(self, ti: int, path: str = "", card_t: float | None = None, what: str = ""):
+        """Open a title in the video player, at its title card when the user wants that."""
+        path = path or self.playable(ti)
+        what = what or f"title {ti}"
+        if card_t is None and ti:
+            card_t = self.card_time(ti)
+        start = 0.0
+        if card_t is not None:
+            player = getattr(self.win.ctl, "player", lambda: None)()
+            dlg = WatchChooser(self, what, card_t, bool(player and player.seeks),
+                               player.label if player else "your video player")
+            if dlg.exec() != QDialog.DialogCode.Accepted or dlg.start is None:
+                return
+            start = dlg.start
+        msg = self.win.ctl.play(path, start)
+        if msg:
+            self.set_season_note(f"Couldn't play {what}. {msg}", error=True)
+        else:
+            self.set_season_note(f"Opened {what} in the video player" +
+                                 (f", at the title card ({fmt_len(int(start))})." if start else "."))
+
+    def set_season_note(self, text: str, error: bool = False):
+        self.season_note.setText(text)
+        self.season_note.setStyleSheet(f"color: {FAIL_TEXT};" if error else "")
+        self.season_note.setVisible(bool(text))
+
+    def compare_titles(self, p) -> list[CompareTitle]:
+        job = self.job
+        cards = self.card_status()
+        reads = self.compare_reads
+        prog = {x.title_index: x for x in self.win.progress_of(job)}
+        with self.win.lock():
+            by = {m.title_index: m for m in job.matches}
+            files = {f.title_index: f for f in job.files}
+        lengths = {ti: (self.title_of(ti).duration_s if self.title_of(ti) else 0) for ti in p.titles}
+        lengths.update({f"o{i}": o.length_s for i, o in enumerate(p.others) if o.length_s})
+        keepable = all(t not in self._locked for t in p.titles)
+        out = []
+        for ti in p.titles:
+            t, m, st, f = self.title_of(ti), by.get(ti), cards.get(ti), files.get(ti)
+            secs = t.duration_s if t else 0
+            size = (f.size_bytes if f and f.size_bytes else (t.size_bytes if t else 0))
+            sub = " · ".join(x for x in (t.source if t else "", fmt_len(secs) if secs else "",
+                                         fmt_size(size) if size else "") if x)
+            rows = [("Matched by", self.SOURCE_WORDS.get(m.source if m else "", "Its running time"), "")]
+            if ti in reads:
+                rows.append(("Title card", f"“{reads[ti][0]}” at {fmt_len(int(reads[ti][1]))}", "#8FE0B0"))
+            elif st is None or st.state in ("waiting", "stopped"):
+                rows.append(("Title card", "Not read yet", MUTED))
+            elif st.state == "reading":
+                rows.append(("Title card", "Reading…", "#A9D1F6"))
+            elif st.state == "read" and st.text:
+                rows.append(("Title card", f"“{st.text}”", "#8FE0B0" if st.sure else "#F5C27A"))
+            else:
+                rows.append(("Title card", "No episode name was found on screen", "#F5C27A"))
+            others = [v for k, v in lengths.items() if k != ti and v]
+            if secs and others:
+                d = max(others) - secs
+                if d > seasonmod.SHORT_CUT_S:
+                    rows.append(("Length", f"{fmt_len(secs)}, {d} s shorter than the other", "#F5C27A"))
+                elif d < -seasonmod.SHORT_CUT_S:
+                    rows.append(("Length", f"{fmt_len(secs)}, {-d} s longer than the other", ""))
+                else:
+                    rows.append(("Length", f"{fmt_len(secs)}, about the same as the other", ""))
+            locked = ti in self._locked
+            tp = prog.get(ti)
+            if locked:
+                now = f"On the NAS as {os.path.basename(f.dest_rel)}" if f and f.dest_rel else "On the NAS"
+            elif f is not None:
+                now = "Ripped. It waits until this is settled." if m and m.held else "Ripped, not copied yet"
+            else:
+                now = "Not ripped yet" if not (tp and tp.state == "ripping") else "Ripping now"
+            rows.append(("Now", now, ""))
+            path = self.playable(ti)
+            card_t = self.card_time(ti, st)
+            named = ti in reads or bool(st is not None and st.state == "read" and st.text)
+            out.append(CompareTitle(
+                key=f"here:{ti}", title_index=ti, label=f"Title {ti}", sub=sub, rows=rows, path=path,
+                card_t=card_t, card_named=named, fixes=not locked,
+                suggest_keep=named and not seasonmod.is_short_cut(job, ti, p),
+                keep_text=f"This is {p.name or p.code}" if keepable and len(p.titles) > 1 else "",
+                note="Already on the NAS, so its match is locked." if locked else "",
+                watch_tip=self.watch_tip(path, card_t)))
+        for i, o in enumerate(p.others):
+            sub = " · ".join(x for x in (o.source, fmt_len(o.length_s) if o.length_s else "") if x) or o.name
+            rows = [("Now", "On the NAS" if o.on_nas else "Ripped, not copied yet", "")]
+            note = ("Change it on that disc's Match page." if o.where == "disc" else
+                    "A file already in the season folder, which Disc Shelf didn't copy.")
+            out.append(CompareTitle(key=f"other:{i}", title_index=None, label=o.label(), sub=sub, rows=rows,
+                                    path=o.path, note=note, watch_tip=self.watch_tip(o.path, None)))
+        return out
+
+    def fill_compare(self):
+        p = self.problem()
+        if p is None:
+            self.compare.hide()
+            return
+        job = self.job
+        cards = self.card_status()
+        if not self.compare_reads:
+            get = getattr(self.win.ctl, "card_reads", None)
+            if get is not None:
+                try:
+                    self.compare_reads = get(job, list(p.titles))
+                except Exception:  # noqa: BLE001 -- the panel shows the card status instead
+                    self.compare_reads = {}
+        hint_cards = dict(cards)
+        for ti, (text, _t) in self.compare_reads.items():
+            hint_cards[ti] = SimpleNamespace(state="read", text=text, sure=False)
+        hint = seasonmod.compare_hint(job, p, hint_cards)
+        with self.win.lock():
+            local = {f.title_index for f in job.files if f.path and not f.local_deleted}
+        unread = [ti for ti in p.titles if ti in local and ti not in self.compare_reads
+                  and (cards.get(ti) is None or cards[ti].state not in ("read", "none", "reading"))]
+        can_read = hasattr(self.win.ctl, "read_cards") and job.id in self.show_ids and bool(unread)
+        n_here = len(p.titles)
+        read_text = ("Read both title cards" if n_here == 2 else "Read their title cards" if n_here > 2
+                     else "Read its title card") if can_read else ""
+        self.compare.set_compare(f"Which title is {p.episode_text()}?", hint, self.compare_titles(p),
+                                 read_text, reading=self.win.busy("cards"))
+
+    def watch_compared(self, key: str):
+        p = self.problem()
+        if p is None:
+            return
+        kind, _, rest = key.partition(":")
+        if kind == "here":
+            self.watch(int(rest))
+        else:
+            o = p.others[int(rest)]
+            self.watch(0, o.path, None, o.label()[:1].lower() + o.label()[1:])
+
+    def read_compared_cards(self):
+        p = self.problem()
+        if p is not None:
+            self.read_cards(only=set(p.titles))
+
+    def open_picker(self, ti: int):
+        for r in range(self.table.rowCount()):
+            cell = self.table.cellWidget(r, 2)
+            combo = cell.findChild(EpisodePicker) if cell is not None else None
+            if combo is not None and combo.accessibleName() and self.rows()[r].title_index == ti:
+                scroll = self.stack.widget(1)
+                if isinstance(scroll, QScrollArea):
+                    scroll.ensureWidgetVisible(combo, 0, 80)
+                if combo.isEnabled():
+                    combo.open_popup()
+                return
+
+    def fix(self, kind: str, ti: int):
+        """One of the compare panel's fixes for the problem being compared."""
+        p, job = self.problem(), self.job
+        if p is None or job is None or ti in self._locked:
+            return
+        with self.win.lock():
+            matches = list(job.matches)
+        if kind == "keep":
+            new = seasonmod.fix_keep(matches, ti, p, self._locked)
+            text = (f"Title {ti} is {p.episode_text()}. "
+                    f"{seasonmod._titles_text([t for t in p.titles if t != ti])} is skipped until you pick its episode.")
+        elif kind == "version":
+            new = seasonmod.fix_version(matches, job, ti, p)
+            v = next((m.version for m in new if m.title_index == ti), "")
+            text = f"Title {ti} is kept as a second version of {p.episode_text()}, “{v}”."
+        else:
+            new = seasonmod.fix_extra(matches, job, ti, p)
+            text = f"Title {ti} is saved as an extra, “{seasonmod.extra_name(job, ti, p)}”, in Featurettes."
+        self.set_matches(job, new)
+        self.compare_reads = {}
+        self.fill_table()
+        self.set_season_note(text)
+        if kind == "keep":
+            rest = [t for t in p.titles if t != ti and t not in self._locked]
+            if rest:
+                self.open_picker(rest[0])
+
+    def grid_clicked(self, number: int):
+        st = self.season_st
+        if st is None:
+            return
+        p = next((p for p in st.problems if p.season == st.season and number in p.numbers), None)
+        if p is not None:
+            self.open_compare(p.key)
+        else:
+            cell = next((c for c in st.cells if c.number == number), None)
+            if cell is not None:
+                self.set_season_note(cell.tip + " That's on another disc, so change it from that disc's Match page.")
 
     def save_later(self):
         try:
@@ -3864,6 +4239,17 @@ class NeedsCard(QFrame):
         w.setObjectName("needsRow")
         ti = label(f"Title {row.title_index}", mono=True)
         ti.setFixedWidth(70)
+        if getattr(row, "held", ""):
+            # Two titles hold one episode: confirming one here wouldn't settle it, comparing them does.
+            why = label(row.held, wrap=True)
+            why.setStyleSheet("color: #FFB4AE; font-size: 13px;")
+            go = button("Compare on the Match page", small=True)
+            go.clicked.connect(lambda: self.page.win.open_match(self.item.job))
+            rl = hbox(ti, why, None, go, spacing=12, margins=(18, 10, 18, 10))
+            rl.setStretch(1, 1)
+            w.setLayout(rl)
+            self.rows[row.title_index] = (QButtonGroup(w), [])
+            return w
         read = label(f"Card reads “{row.read}”" if row.read else (row.note or "Needs a check"), wrap=True)
         read.setStyleSheet(f"color: {SOFT}; font-size: 13px;")
         read.setToolTip(row.note)

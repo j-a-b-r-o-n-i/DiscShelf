@@ -119,11 +119,14 @@ class Match:
     source: str = ""             # what made it: "runtime" | "card" | "discdb" | "list" | "manual"; "" = older jobs
     version: str = ""            # a second cut of an episode another title also holds, e.g. "Short cut";
                                  # both files keep the episode's name and Plex offers them under Play Version
+    held: str = ""               # another title or file holds the same episode (season.py): this sentence
+                                 # leads the note, and the title isn't copied until that's settled
+    held_was: str = ""           # the confidence it had before it was held, given back afterwards
 
     @property
     def ready(self) -> bool:
         """May be copied as soon as its title is ripped."""
-        return self.target != "skip" and (self.confirmed or self.confidence == "close")
+        return self.target != "skip" and not self.held and (self.confirmed or self.confidence == "close")
 
 
 @dataclass

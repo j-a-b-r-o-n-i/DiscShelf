@@ -67,8 +67,51 @@ over every episode of the show.
 - "s3e8", "3x8" or "8" find an episode by number.
 - The season buttons narrow the list.
 - The title's current match and any episode its note names come first, with the reason.
-- An episode another title already uses says which title.
+- The disc's own season is listed as **Free** first, then **Taken**, each taken episode
+  saying where it is: another title of this disc, another disc of the season, or the
+  library. A taken episode can still be picked; it then shows as a problem straight away.
 - The mouse wheel never changes a pick.
+
+**The same episode twice.** After any match (TheDiscDB, the case, title cards, running
+time or a pick by hand), Disc Shelf looks for an episode held by two titles of the disc,
+including a two-part title that overlaps another. It also looks across the season:
+
+- the other discs of the same show and season (by TVmaze show, or by name and year), from
+  the jobs in `~/.local/state/disc-shelf/jobs/`. A re-rip of a disc (the same volume label,
+  or the same disc number) replaces the earlier rip rather than clashing with it;
+- the files already in the season folder of the library, by the `S01E20` in their names.
+  The folder is only listed, never changed.
+
+Each title involved is marked "check" with a sentence naming the other ("Title 26 is also
+S01E20 “Markets”."), and it isn't copied, even during a rip, until the problem is settled.
+A title already on the NAS keeps its match. The red box at the top of the Match page lists
+each problem; **Compare** shows the titles side by side with their length, playlist, size,
+what their title cards read and where they are now, and offers:
+
+- **This is …**: the title keeps the episode, and the other is skipped until you pick its
+  episode.
+- **Keep as a second version**: both keep the episode, and this file gets " - Short cut"
+  (when it's more than 5 seconds shorter) or " - Version 2" in its name, so Plex offers the
+  two under Play Version.
+- **Save as an extra**: it goes to `Featurettes` as "<episode> (short cut)".
+- **Pick another episode** opens the title's picker.
+
+**Read both title cards** reads just those titles. A card is judged on its own here,
+since two titles showing the same name would otherwise be taken for the show's own text.
+When both read the same name and one is shorter, the panel says the shorter one is
+probably a second cut.
+
+**The season grid** below the matches has a cell per episode of the season: on this disc
+(T and the title number), on another disc (D and its number), in the library (Lib), on more
+than one title (×2), or no title yet (a dashed outline). Hover a cell to see where it is;
+click a ×2 cell to compare its titles.
+
+**Watch.** The ▶ button on each title opens it in a video player: the ripped file, or its
+checked copy on the NAS once the local file is gone. It's available once the title is
+ripped. When the title card was read, you choose between starting at the card or from the
+beginning. mpv and VLC can start at the card; Celluloid and the desktop's default player
+start from the beginning. Inside the Flatpak, mpv or VLC on the host is started with
+`flatpak-spawn --host`; without either, the desktop's default player opens the file.
 
 ## Copy to your library
 
@@ -92,6 +135,8 @@ over every episode of the show.
 The Queue lists discs by what they need rather than by date.
 
 - **Needs you**:
+  - Titles that share an episode with another title, with a button to compare them on the
+    Match page.
   - A title whose match needs a check. What its title card read and the likely episodes
     are shown, and confirming one copies it straight away, even mid-rip.
   - Titles matched but not copied yet.
