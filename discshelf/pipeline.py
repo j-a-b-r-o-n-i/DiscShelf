@@ -30,7 +30,7 @@ from typing import Callable
 
 from . import (av1, caseocr, classify, config, discdb, discinfo, hdr, makemkv, match, naming, ocr, theme, titlecard,
                transfer, watch)
-from . import play, season
+from . import nasfix, play, season
 from .config import Config
 from .jobs import JobStore, now_iso
 from .models import Disc, Drive, EncodeJob, Episode, Job, Match, RippedFile, Sample, Title, TitleProgress
@@ -821,7 +821,7 @@ def card_workers() -> int:
     return max(1, min(4, (os.cpu_count() or 2) // 8))
 
 
-class Controller(QueueViews, season.SeasonChecks):
+class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
     def __init__(self, cfg: Config, store: JobStore | None = None, tvmaze: TvMaze | None = None,
                  discdb_client: discdb.TheDiscDb | None = None):
         self.cfg = cfg

@@ -25,7 +25,7 @@ import zlib
 import time
 from types import SimpleNamespace
 
-from . import av1, season
+from . import av1, nasfix, season
 from .play import Player
 from .config import Config, sample_destinations
 from .discinfo import AudioInfo, DiscReport, SubtitleInfo, TitleInfo, VideoInfo
@@ -222,7 +222,7 @@ def _left(seconds: float) -> str:
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 
-class FakeController(QueueViews, season.SeasonChecks):
+class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
     def __init__(self, cfg: Config | None = None, delay: float = 0.06):
         self.cfg = cfg or Config()
         if not self.cfg.destinations:
@@ -335,15 +335,16 @@ class FakeController(QueueViews, season.SeasonChecks):
         self._seed_bluey()
 
     def _seed_bluey(self):
-        """Bluey season 1 on two discs. Disc 1 went to the NAS 3 days ago with titles 6 and 26 both
-        as “Markets” (so the NAS has a “S01E20 (2)”); disc 2 is ripped and matched, and titles 1
-        and 27 are both “Daddy Putdown”, which holds both back."""
+        """Bluey season 1 on two discs whose labels give no disc number. Disc 1 went to the NAS 3 days
+        ago with titles 6 and 26 both as “Markets” (title 26 is French only), so the NAS has
+        “S01E20.mkv” and “S01E20 (2).mkv”. Disc 2 is ripped and matched: titles 1 and 27 are both
+        “Daddy Putdown”, which holds both back, and title 19 was matched by its running time only."""
         tv = self.cfg.destination("tv")
         eps = {n: Episode(1, n, name, rt) for n, name, rt in EPISODES[(41821, 1)]}
         for disc, rows, created in ((1, BLUEY_D1, 4400), (2, BLUEY_D2, 180)):
-            label = f"BLUEY_S1_D{disc}"
+            label = f"Bluey S1 {'First' if disc == 1 else 'Second'} Half"
             job = Job(id=self._new_id(), disc_label=label, media_kind="tv", show="Bluey", show_id=41821,
-                      year=2018, season=1, disc_number=disc, destination=tv.path if tv else "",
+                      year=2018, season=1, disc_number=None, destination=tv.path if tv else "",
                       library=tv.library if tv else "", rip_dir=f"{self.cfg.rip_path}/{label}",
                       created=_now(created), updated=_now(created - 30))
             for k, (n, src, secs) in enumerate(rows):
@@ -361,10 +362,17 @@ class FakeController(QueueViews, season.SeasonChecks):
                                                          size if done else 0, size if done else 0))
                 job.matches.append(Match(ti, "episode", copy.deepcopy(eps[n]), confidence="close", source="discdb"))
             if disc == 1:
-                self.plan_paths(job)
+                # Copied before episode names were in file names and duplicates were checked.
+                for f, (n, _src, _secs) in zip(job.files, rows):
+                    f.dest_rel = f"Bluey (2018)/Season 01/Bluey (2018) - S01E{n:02d}" + \
+                        (" (2).mkv" if f.title_index == 26 else ".mkv")
                 job.stage, job.progress, job.copied_at = "done", 1.0, _now(created - 40)
                 job.status = "Copied to TV Shows and checked. Plex added it."
             else:
+                m19 = job.matches[18]
+                m19.confidence, m19.source = "check", "runtime"
+                m19.note = ("Every episode of this season is 7 minutes, so its running time fits any of them and "
+                            "this is a guess. Reading its title card or watching it settles it.")
                 job.stage, job.progress = "match", 1.0
                 job.status = "Ripped 27 titles. Match them to episodes next."
             self._jobs[job.id] = job
@@ -1292,7 +1300,7 @@ class FakeController(QueueViews, season.SeasonChecks):
                                        source="card", note=f"The title card reads “{text}”."))
             bluey.files.append(RippedFile(100 + n, "", state="verified",
                                           dest_rel=f"Bluey (2018)/Season 01/Bluey (2018) - S01E{n:02d}.mkv"))
-        return [bluey, *self.jobs()]
+        return [*self.jobs(), bluey]       # last, so its card readings are the ones the page shows
 
     def plex_scan_folder(self, library: str, rel: str) -> str:
         self.plex_scans.append((library, rel))

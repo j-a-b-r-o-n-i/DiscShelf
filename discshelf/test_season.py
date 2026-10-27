@@ -9,6 +9,11 @@ title whose episode is already on another disc of the season, or already a file 
 season folder, is held too; a re-rip of a disc replaces its earlier job instead of clashing;
 a title kept as a second version doesn't clash and its file gets " - Short cut"; settling a
 problem gives back the earlier confidence and note; and the three fixes do what they say.
+Discs without a number are numbered by rip order and named by their label. A match that needs
+a check becomes its own problem. Two files already on the NAS for one episode are found from
+another disc or from their own disc, the French-only one is renamed as the French version (with
+its subtitles) through library.apply, the job that copied it is updated and saved, and Undo
+puts back both the files and the record.
 
 The jobs are made up here, a two-disc season of 7-minute episodes; nothing reads real job
 files or a real share. The controller test uses a temporary job folder and a fake TVmaze.
@@ -23,7 +28,7 @@ from types import SimpleNamespace
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
-from discshelf import discdb, naming, pipeline, season  # noqa: E402
+from discshelf import discdb, library, nasfix, naming, pipeline, season  # noqa: E402
 from discshelf.config import Config, Destination  # noqa: E402
 from discshelf.jobs import JobStore  # noqa: E402
 from discshelf.models import Episode, Job, Match, RippedFile, Stream, Title, TitleProgress  # noqa: E402
@@ -273,6 +278,120 @@ def run():
         paths = dict(ctl.preview_paths(b))
         check(paths.get(3, "").endswith("S01E06 - Marbles - Short cut.mkv") and paths.get(1, "").endswith("S01E06 - Marbles.mkv"),
               f"paths: {paths.get(1)} / {paths.get(3)}")
+
+    # --- disc numbers by rip order, and the label in sentences ---------------------------
+    one = disc("n1", "Kites and Things S1 First Half", None, [1], created="2026-01-01T10:00:00")
+    two = disc("n2", "Kites and Things S1 Second Half", None, [2], created="2026-01-02T10:00:00")
+    numbered = disc("n3", "KITES_S1_D3", 3, [3])
+    check(season.disc_numbers([two, one, numbered]) == {"n1": 1, "n2": 2, "n3": 3},
+          f"disc numbers: {season.disc_numbers([two, one, numbered])}")
+    check(season.label_words(one) == "First Half" and season.label_words(numbered) == "",
+          f"label words: {season.label_words(one)!r} {season.label_words(numbered)!r}")
+    h = season.title_holders(one, "disc", number=1)[0]
+    check(h.phrase() == "disc 1, First Half, title 1" and h.disc_no == 1, f"phrase: {h.phrase()}")
+
+    # --- a check match ----------------------------------------------------------------
+    d5 = disc("d5", "KITES_S1_D5", 5, [7, 8])
+    by(d5, 2).confidence, by(d5, 2).source = "check", "runtime"
+    checks = season.find_checks(d5)
+    check([(p.key, p.text) for p in checks] == [("check:2", "Title 2 was matched by its running time only")],
+          f"checks: {[(p.key, p.text) for p in checks]}")
+    check(not season.find_checks(d5, locked={2}), "a copied title was offered for a check")
+    by(d5, 2).confirmed = True
+    check(not season.find_checks(d5), "a confirmed match is still a check")
+    check(season.card_agrees("ROCKPOOL", "Rockpool") and season.card_agrees("R0CKP00L", "Rockpool")
+          and not season.card_agrees("TADPOLES", "Rockpool"), "card_agrees")
+
+    # --- two files on the NAS for one episode: rename the French one, update the job, undo ----
+    def french(job, ti):
+        t = next(t for t in job.titles if t.index == ti)
+        t.streams = [Stream(0, "video"), Stream(1, "audio", lang="fra")]
+        for o in job.titles:
+            if o.index != ti:
+                o.streams = [Stream(0, "video"), Stream(1, "audio", lang="eng")]
+
+    with tempfile.TemporaryDirectory() as root:
+        dest = os.path.join(root, "nas")
+        cfg = Config(rip_dir=os.path.join(root, "rips"),
+                     destinations=[Destination("tv", "Shows", dest, "", "tv")])
+        store = JobStore(os.path.join(root, "jobs"))
+        ctl = pipeline.Controller(cfg, store, tvmaze=TvMaze(),
+                                  discdb_client=discdb.TheDiscDb(fetch=lambda _u, _b: NO_DISCDB))
+        first = disc("f1", "Kites and Things S1 First Half", None, [1, 2, 3, 2], lengths={4: 431}, state="verified",
+                     created="2026-01-01T10:00:00", dest=dest)
+        french(first, 4)
+        f4 = next(f for f in first.files if f.title_index == 4)
+        f4.dest_rel = f4.dest_rel.replace(".mkv", " (2).mkv")
+        store.save(first)
+        second = disc("f2", "Kites and Things S1 Second Half", None, [4, 5], created="2026-01-02T10:00:00", dest=dest)
+        store.save(second)
+        sdir = os.path.join(dest, "Kites and Things (2019)", "Season 01")
+        os.makedirs(sdir)
+        for f in first.files:
+            open(os.path.join(dest, f.dest_rel), "w").close()
+        open(os.path.join(sdir, "Kites and Things (2019) - S01E02 (2).en.srt"), "w").close()
+        st = ctl.season_status(second, refresh=True)
+        nas = [p for p in st.problems if p.kind == "nas"]
+        check(len(nas) == 1 and nas[0].text == "Two files on the NAS are S01E02 “Puddles”." and not nas[0].titles,
+              f"NAS duplicate from another disc: {[(p.kind, p.text) for p in st.problems]}")
+        cell2 = next(c for c in st.cells if c.number == 2)
+        check(cell2.state == "duplicate" and cell2.problem == "nas:1:2", f"cell 2: {cell2.state} {cell2.problem}")
+        check(next(c for c in st.cells if c.number == 1).mark == "D1", "disc 1 isn't D1 by rip order")
+        p = nas[0]
+        odd, kept = nasfix.odd_one(p.sides)
+        check(odd.title_index == 4 and kept.title_index == 2, f"odd one: {odd.title_index}")
+        opts = nasfix.options(p)
+        check(opts[0][0] == "version" and opts[0][3] and opts[0][1] == "Keep disc 1, First Half, title 4 as the "
+              "French version", f"options: {opts[0]}")
+        old = "Kites and Things (2019)/Season 01/Kites and Things (2019) - S01E02 (2).mkv"
+        new = "Kites and Things (2019)/Season 01/Kites and Things (2019) - S01E02 - Puddles - French.mkv"
+        plan = nasfix.plan(p, "version", naming.Scheme())
+        check(plan.moves == [(old, new)], f"plan: {plan.moves}")
+        swap = nasfix.plan(p, "swap", naming.Scheme())
+        check([d for _s, d in swap.moves] == ["Kites and Things (2019)/Season 01/Kites and Things (2019) - S01E02 - "
+                                              "Puddles.mkv", "Kites and Things (2019)/Season 01/Kites and Things "
+                                              "(2019) - S01E02 - Puddles - English.mkv"], f"swap: {swap.moves}")
+        aside = nasfix.plan(p, "aside", naming.Scheme())
+        check(aside.moves[0][1] == "Kites and Things (2019)/Set aside/Kites and Things (2019) - S01E02 (2).mkv"
+              and aside.extra_files[0][0].endswith("Set aside/.plexignore"), f"aside: {aside.moves}")
+        extra = nasfix.plan(p, "extra", naming.Scheme())
+        check(extra.moves[0][1] == "Kites and Things (2019)/Featurettes/Puddles (French).mkv", f"extra: {extra.moves}")
+
+        done = ctl.apply_nas_fix(second, plan, rescan=False)
+        names = sorted(os.listdir(sdir))
+        check("Kites and Things (2019) - S01E02 - Puddles - French.mkv" in names
+              and "Kites and Things (2019) - S01E02 - Puddles - French.en.srt" in names
+              and "Kites and Things (2019) - S01E02 (2).mkv" not in names, f"after the rename: {names}")
+        check(os.path.isfile(done.log) and os.path.dirname(done.log) == ctl.fix_undo_dir(), "no undo log")
+        saved = store.load("f1")
+        m4, f4 = by(saved, 4), next(f for f in saved.files if f.title_index == 4)
+        check(m4.version == "French" and f4.dest_rel == new, f"disc 1's record: {m4.version!r} {f4.dest_rel}")
+        st = ctl.season_status(second, refresh=True)
+        check(not [p for p in st.problems if p.kind == "nas"], "the renamed pair is still flagged")
+        text = ctl.undo_nas_fix(second, done, rescan=False)
+        names = sorted(os.listdir(sdir))
+        check("Kites and Things (2019) - S01E02 (2).mkv" in names and
+              "Kites and Things (2019) - S01E02 (2).en.srt" in names, f"undo: {text} {names}")
+        saved = store.load("f1")
+        check(by(saved, 4).version == "" and next(f for f in saved.files if f.title_index == 4).dest_rel == old,
+              "undo didn't restore disc 1's record")
+        st = ctl.season_status(second, refresh=True)
+        check([p.key for p in st.problems if p.kind == "nas"] == ["nas:1:2"], "the pair isn't flagged after undo")
+
+        # The same pair seen from disc 1 itself: its titles are copied, so it's a NAS duplicate there too.
+        live = store.load("f1")
+        st = ctl.season_status(live, refresh=True)
+        check([(p.kind, p.titles) for p in st.problems] == [("nas", [2, 4])], f"from disc 1: {st.problems}")
+        p = st.problems[0]
+        done = ctl.apply_nas_fix(live, nasfix.plan(p, "extra", naming.Scheme()), rescan=False)
+        check(by(live, 4).target == "extra" and by(live, 4).extra_name == "Puddles (French)"
+              and next(f for f in live.files if f.title_index == 4).dest_rel.endswith("Featurettes/Puddles (French).mkv"),
+              "a locked title on this disc wasn't updated")
+        check(os.path.isfile(os.path.join(dest, "Kites and Things (2019)", "Featurettes", "Puddles (French).mkv")),
+              "the extra wasn't moved")
+        ctl.undo_nas_fix(live, done, rescan=False)
+        check(by(live, 4).target == "episode" and os.path.isfile(os.path.join(dest, old)), "undo from disc 1")
+        check(library.last_log(ctl.fix_undo_dir()) is None, "an undone log is still offered")
 
     for f in failures:
         print("FAIL:", f)

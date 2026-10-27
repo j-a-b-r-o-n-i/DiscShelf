@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QGuiApplication
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QToolTip, QVBoxLayout, QWidget,
+    QButtonGroup, QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QRadioButton, QSizePolicy,
+    QToolTip, QVBoxLayout, QWidget,
 )
 
 from .picker import FlowLayout, mono_font
@@ -23,15 +24,17 @@ LINK, ACCENT = "#7CB8F0", "#F0A23B"
 BAD_BG, BAD_BORDER, BAD_TITLE, BAD_TEXT, BAD_CODE = "#241617", "#7A3B3B", "#FFD7D3", "#F1C9C5", "#FFB4AE"
 
 # The grid's states: (fill, border, text, legend). Each cell also carries a short text (T6, D1,
-# Lib, ×2) and free cells a dashed border, so no state is told by colour alone.
+# Lib, ×2, ?) and free cells a dashed border, so no state is told by colour alone.
 CELL_LOOK = {
     "here": ("#2A2419", "#8A6A33", "#F5C27A", "On this disc"),
     "disc": ("#1B2633", "#3B5A78", "#A9D1F6", "On another disc"),
     "library": ("#1F2A22", "#3E6B50", "#8FE0B0", "In the library"),
-    "duplicate": ("#3A1D1D", "#E5534B", "#FFB4AE", "On more than one title"),
+    "duplicate": ("#3A1D1D", "#E5534B", "#FFB4AE", "On two titles or files"),
+    "check": ("#2A2213", ACCENT, "#F5C27A", "Needs a check"),
     "free": ("", "#7D858C", "#A2A9B0", "No title yet"),
 }
-CELL_ORDER = ("here", "disc", "library", "duplicate", "free")
+CELL_ORDER = ("here", "disc", "library", "duplicate", "check", "free")
+FLAGGED = ("duplicate", "check")
 
 
 def _label(text: str = "", role: str | None = None, wrap: bool = False) -> QLabel:
@@ -96,182 +99,348 @@ def watch_button(text: str = "") -> QPushButton:
 # The problems banner
 # ---------------------------------------------------------------------------
 
-class ProblemsBanner(QFrame):
-    """A red box at the top of the Match page listing each problem in a sentence, each with a
-    Compare link."""
+class ClickChip(QLabel):
+    """A chip in the match table that opens the fix panel: by mouse, or Enter or Space when it has
+    the keyboard focus."""
 
-    compare = Signal(str)        # the problem's key
+    clicked = Signal()
+
+    def __init__(self, text: str, kind: str):
+        super().__init__(text)
+        self.setProperty("chip", kind)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+
+    def mousePressEvent(self, e):  # noqa: N802 -- Qt's name
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            return
+        super().mousePressEvent(e)
+
+    def keyPressEvent(self, e):  # noqa: N802
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.clicked.emit()
+            return
+        super().keyPressEvent(e)
+
+
+class ProblemsBanner(QFrame):
+    """One line at the top of the Match page saying what needs a look, with a button that opens
+    the fix panel on the first problem, or steps to the next one."""
+
+    next = Signal()
 
     def __init__(self):
         super().__init__()
         self.setObjectName("problems")
-        self.setStyleSheet(f"QFrame#problems {{ background: {BAD_BG}; border: 1px solid {BAD_BORDER}; border-radius: 12px; }}")
-        self.setAccessibleName("Problems with the matches")
+        self.setStyleSheet("QFrame#problems { background: #201915; border: 1px solid #5A3A2A; border-radius: 12px; }")
+        self.setAccessibleName("What needs a look")
         mark = QLabel("!")
         mark.setFixedSize(22, 22)
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        mark.setStyleSheet("background: #E5534B; color: #1A0E0E; font-weight: 700; font-size: 13px; border-radius: 11px;")
-        self.title = QLabel("")
-        self.title.setStyleSheet(f"color: {BAD_TITLE}; font-weight: 600;")
-        head = QHBoxLayout()
-        head.setSpacing(10)
-        head.addWidget(mark)
-        head.addWidget(self.title, 1)
-        self.rows = QVBoxLayout()
-        self.rows.setSpacing(8)
-        self.rows.setContentsMargins(32, 0, 0, 0)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(18, 14, 18, 14)
-        lay.setSpacing(10)
-        lay.addLayout(head)
-        lay.addLayout(self.rows)
-        self.lines: list[tuple[QLabel, QLabel]] = []
+        mark.setStyleSheet(f"background: {ACCENT}; color: #1A1206; font-weight: 700; font-size: 13px; border-radius: 11px;")
+        self.line = QLabel("")
+        self.line.setWordWrap(True)
+        self.line.setStyleSheet("color: #F2D2B0;")
+        self.button = _button("Fix it", primary=True)
+        self.button.clicked.connect(self.next.emit)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(12)
+        lay.addWidget(mark, 0, Qt.AlignmentFlag.AlignTop)
+        lay.addWidget(self.line, 1)
+        lay.addWidget(self.button)
 
-    def set_problems(self, items: list[tuple[str, str, str]], current: str = "") -> None:
-        """items: (key, sentence, what it means for copying)."""
-        while self.rows.count():
-            w = self.rows.takeAt(0).widget()
-            if w:
-                w.hide()            # deleteLater waits for the event loop; until then it would still draw
-                w.deleteLater()
-        self.lines = []
-        n = len(items)
-        self.title.setText("One episode is matched to more than one title" if n == 1 else
-                           f"{n} episodes are matched to more than one title")
-        for key, text, effect in items:
-            row = QWidget()
-            rl = QHBoxLayout(row)
-            rl.setContentsMargins(0, 0, 0, 0)
-            rl.setSpacing(14)
-            t = QLabel(f"{text} {effect}".strip())
-            t.setWordWrap(True)
-            t.setStyleSheet(f"color: {BAD_TEXT}; font-size: 13px;")
-            btn = _link("Comparing below" if key == current else "Compare", lambda k=key: self.compare.emit(k))
-            btn.setAccessibleName(f"Compare the titles: {text}")
-            rl.addWidget(t, 1)
-            rl.addWidget(btn, 0, Qt.AlignmentFlag.AlignTop)
-            self.rows.addWidget(row)
-            self.lines.append((t, btn))
-        self.setVisible(bool(items))
+    def set_line(self, text: str, button_text: str) -> None:
+        self.line.setText(text)
+        self.button.setText(button_text)
+        self.setVisible(bool(text))
 
 
 # ---------------------------------------------------------------------------
-# Comparing the titles that hold one episode
+# The fix panel: one layout for everything flagged, and for what's known about the rest
 # ---------------------------------------------------------------------------
 
 @dataclass
 class CompareTitle:
-    """One title (or library file) in the compare panel, as the Match page describes it."""
-    key: str                     # "here:6", "disc:<job id>:7", "library:<file name>"
+    """One side in the fix panel: a title of this disc, another disc's title, or a library file."""
+    key: str                     # "here:6", "side:0"
     title_index: int | None      # on this disc, else None
-    label: str                   # "Title 27", "Disc 1, title 12", "In the library"
-    sub: str                     # "00034.m2ts · 7:14 · 1.0 GB"
+    label: str                   # "Title 27", "Disc 1, First Half, title 26"
+    sub: str                     # "00034.m2ts · 7:14 · 1.0 GB", or its file name on the NAS
     rows: list[tuple[str, str, str]] = field(default_factory=list)   # (caption, value, colour or "")
     path: str = ""               # a file that plays it, "" when none yet
     card_t: float | None = None  # seconds in where its title card names the episode
     card_named: bool = False     # its card reads the episode's name
-    fixes: bool = False          # its match can be changed from here
-    keep_text: str = ""          # "This is Daddy Putdown", "" when not offered
-    version_text: str = "Keep as a second version"   # "Keep as the French version" for a dub
-    suggest_keep: bool = False   # its card names the episode and it isn't the shorter cut
-    note: str = ""               # one sentence under the buttons
+    odd: bool = False            # the side the suggested fix changes, drawn with an amber edge
     watch_tip: str = ""
 
 
+@dataclass
+class FixOption:
+    key: str
+    label: str                   # "Keep title 26 as the French version (suggested)"
+    what: str                    # what happens, in a sentence or two
+    apply: str = ""              # the apply button's text when it's chosen: "Rename 1 file"
+    changes: list[tuple[str, str]] = field(default_factory=list)   # (old, new) on the NAS
+
+
+@dataclass
+class FixView:
+    kind: str                    # "error" | "warn" | "info" | "done"
+    title: str
+    text: str
+    sides: list[CompareTitle] = field(default_factory=list)
+    options: list[FixOption] = field(default_factory=list)
+    selected: str = ""
+    note: str = ""               # one line beside the apply button
+    rescan: str = ""             # "Ask Plex to rescan Season 01 afterwards", "" for no checkbox
+    step: tuple[int, int] | None = None   # (position from 1, how many)
+    busy: str = ""               # the apply button's text while a fix runs
+
+
+LOOKS = {"error": ("#7A3B3B", "#241617", "#E5534B", "!"), "warn": ("#7A5A2A", "#221C13", ACCENT, "?"),
+         "done": ("#2F5A42", "#15211A", "#8FE0B0", "✓"), "info": ("#2E3338", "#1A1D20", LINK, "i")}
+
+
 class ComparePanel(QFrame):
-    keep = Signal(int)
-    version = Signal(int)
-    extra = Signal(int)
-    pick = Signal(int)
-    skip = Signal(int)
+    """The fix panel. Every flagged thing on the Match page opens it: what's wrong in a sentence,
+    each side with Watch, the fixes as choices that say what happens, one apply button named for
+    the action, and afterwards a result line with Undo. Anything not flagged opens it as what's
+    known about it."""
+
+    apply = Signal(str)          # the chosen option's key
+    chosen = Signal(str)
+    undo = Signal()
+    step = Signal(int)           # -1 or +1
     watch = Signal(str)          # a CompareTitle key
-    read_cards = Signal()
     closed = Signal()
 
     def __init__(self):
         super().__init__()
-        self.setObjectName("compare")
-        self.setStyleSheet("QFrame#compare { background: #1A1D20; border: 1px solid #3A4046; border-radius: 12px; }"
-                           "QFrame#cmpTitle { background: #15181B; border: 1px solid #3A4046; border-radius: 10px; }"
-                           "QFrame#cmpTitle[named=\"true\"] { border-color: #2F5A42; }"
-                           "QFrame#cmpHead { background: transparent; border: none; border-bottom: 1px solid #2E3338;"
-                           " border-radius: 0; }")
+        self.setObjectName("fixPanel")
+        self.head = QFrame()
+        self.head.setObjectName("fixHead")
+        self.dot = QLabel("!")
+        self.dot.setFixedSize(20, 20)
+        self.dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.heading = _label("", "h2")
-        self.read_btn = _button("Read both title cards")
-        self.read_btn.clicked.connect(self.read_cards.emit)
+        self.heading.setWordWrap(True)
+        self.prev_btn = _button("‹")
+        self.next_btn = _button("›")
+        for b, name in ((self.prev_btn, "Previous problem"), (self.next_btn, "Next problem")):
+            b.setAccessibleName(name)
+            b.setFixedWidth(34)
+        self.prev_btn.clicked.connect(lambda: self.step.emit(-1))
+        self.next_btn.clicked.connect(lambda: self.step.emit(1))
+        self.step_text = _label("", "small")
         self.close_btn = _button("Close")
-        self.close_btn.setAccessibleName("Close the comparison")
+        self.close_btn.setAccessibleName("Close the panel")
         self.close_btn.clicked.connect(self.closed.emit)
-        head = QFrame()
-        head.setObjectName("cmpHead")
-        hl = QHBoxLayout(head)
-        hl.setContentsMargins(20, 12, 20, 12)
-        hl.setSpacing(12)
+        hl = QHBoxLayout(self.head)
+        hl.setContentsMargins(16, 10, 16, 10)
+        hl.setSpacing(10)
+        hl.addWidget(self.dot)
         hl.addWidget(self.heading, 1)
-        hl.addWidget(self.read_btn)
+        hl.addWidget(self.prev_btn)
+        hl.addWidget(self.step_text)
+        hl.addWidget(self.next_btn)
         hl.addWidget(self.close_btn)
-        self.hint = _label("", wrap=True)
-        self.hint.setStyleSheet("color: #CFE3F5; font-size: 13px;")
+        self.text = _label("", wrap=True)
+        self.text.setStyleSheet("color: #D5D9DD;")
         self.cards = QHBoxLayout()
-        self.cards.setSpacing(14)
+        self.cards.setSpacing(12)
+        self.options_box = QWidget()
+        self.options_lay = QVBoxLayout(self.options_box)
+        self.options_lay.setContentsMargins(0, 0, 0, 0)
+        self.options_lay.setSpacing(8)
+        self.group = QButtonGroup(self)
+        self.group.setExclusive(True)
+        self.group.idClicked.connect(self._picked)
+        self.change_box = QFrame()
+        self.change_box.setObjectName("fixChange")
+        cl = QVBoxLayout(self.change_box)
+        cl.setContentsMargins(0, 10, 0, 0)
+        cl.setSpacing(4)
+        cl.addWidget(_label("What changes on the NAS", "small"))
+        self.change_lines = QLabel("")
+        self.change_lines.setTextFormat(Qt.TextFormat.RichText)
+        self.change_lines.setWordWrap(True)
+        self.change_lines.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        cl.addWidget(self.change_lines)
+        self.rescan = QCheckBox("")
+        self.rescan.setChecked(True)
+        cl.addWidget(self.rescan)
+        self.apply_btn = _button("", primary=True, small=False)
+        self.apply_btn.clicked.connect(lambda: self.apply.emit(self.selected))
+        self.apply_note = _label("", "small", wrap=True)
+        arow = QHBoxLayout()
+        arow.setSpacing(12)
+        arow.addWidget(self.apply_btn)
+        arow.addWidget(self.apply_note, 1)
+        self.apply_row = QWidget()
+        self.apply_row.setLayout(arow)
+        arow.setContentsMargins(0, 0, 0, 0)
+        self.done = QFrame()
+        self.done.setObjectName("fixDone")
+        self.done_text = QLabel("")
+        self.done_text.setWordWrap(True)
+        self.done_text.setStyleSheet("color: #BFEBD0; font-size: 13px;")
+        self.undo_link = _link("Undo", self.undo.emit)
+        self.undo_link.setAccessibleName("Undo the fix")
+        dl = QHBoxLayout(self.done)
+        dl.setContentsMargins(12, 10, 12, 10)
+        dl.setSpacing(14)
+        dl.addWidget(self.done_text, 1)
+        dl.addWidget(self.undo_link, 0, Qt.AlignmentFlag.AlignTop)
+        self.done.hide()
+        body = QVBoxLayout()
+        body.setContentsMargins(16, 14, 16, 16)
+        body.setSpacing(14)
+        body.addWidget(self.done)
+        body.addWidget(self.text)
+        body.addLayout(self.cards)
+        body.addWidget(self.options_box)
+        body.addWidget(self.change_box)
+        body.addWidget(self.apply_row)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addWidget(head)
-        body = QVBoxLayout()
-        body.setContentsMargins(20, 12, 20, 18)
-        body.setSpacing(12)
-        body.addWidget(self.hint)
-        body.addLayout(self.cards)
+        lay.addWidget(self.head)
         lay.addLayout(body)
+        self.view: FixView | None = None
+        self.selected = ""
+        self.option_frames: dict[str, QFrame] = {}
         self.watch_buttons: dict[str, QPushButton] = {}
-        self.fix_buttons: dict[tuple[str, int], QPushButton] = {}
+        self._look("info")
         self.hide()
 
-    def set_compare(self, heading: str, hint: str, titles: list[CompareTitle], read_text: str = "",
-                    reading: bool = False) -> None:
-        """read_text "" hides the Read title cards button."""
-        self.heading.setText(heading)
-        self.hint.setText(hint)
-        self.hint.setVisible(bool(hint))
-        self.read_btn.setVisible(bool(read_text))
-        self.read_btn.setText("Reading title cards…" if reading else read_text)
-        self.read_btn.setEnabled(not reading)
-        while self.cards.count():
-            w = self.cards.takeAt(0).widget()
-            if w:
-                w.hide()
-                w.deleteLater()
-        self.watch_buttons, self.fix_buttons = {}, {}
-        for t in titles:
-            self.cards.addWidget(self._card(t), 1)
+    def _look(self, kind: str) -> None:
+        border, head, dot, icon = LOOKS.get(kind, LOOKS["info"])
+        self.setStyleSheet(
+            f"QFrame#fixPanel {{ background: #1A1D20; border: 1px solid {border}; border-radius: 12px; }}"
+            f"QFrame#fixHead {{ background: {head}; border: none; border-bottom: 1px solid #2E3338;"
+            " border-top-left-radius: 12px; border-top-right-radius: 12px; }"
+            "QFrame#fixSide { background: #15181B; border: 1px solid #3A4046; border-radius: 10px; }"
+            "QFrame#fixSide[odd=\"true\"] { border-color: #8A6A33; }"
+            "QFrame#fixOption { background: transparent; border: 1px solid #3A4046; border-radius: 10px; }"
+            f"QFrame#fixOption[on=\"true\"] {{ background: #2A2419; border-color: {ACCENT}; }}"
+            "QFrame#fixChange { background: transparent; border: none; border-top: 1px solid #262A2E; border-radius: 0; }"
+            "QFrame#fixDone { background: #15211A; border: 1px solid #2F5A42; border-radius: 10px; }")
+        self.dot.setText(icon)
+        self.dot.setStyleSheet(f"background: {dot}; color: #1A0E0E; font-weight: 700; font-size: 12px; border-radius: 10px;")
+
+    def set_view(self, v: FixView) -> None:
+        self.view = v
+        self._look(v.kind)
+        self.heading.setText(v.title)
+        self.text.setText(v.text)
+        self.text.setVisible(bool(v.text))
+        steps = v.step is not None and v.step[1] > 1
+        for w in (self.prev_btn, self.next_btn, self.step_text):
+            w.setVisible(steps)
+        if steps:
+            self.step_text.setText(f"{v.step[0]} of {v.step[1]}")
+        _clear(self.cards)
+        self.watch_buttons = {}
+        for t in v.sides:
+            self.cards.addWidget(self._side(t), 1)
+        _clear(self.options_lay)
+        for b in self.group.buttons():
+            self.group.removeButton(b)
+        self.option_frames = {}
+        for i, o in enumerate(v.options):
+            self.options_lay.addWidget(self._option(i, o))
+        self.options_box.setVisible(bool(v.options))
+        self.selected = v.selected if any(o.key == v.selected for o in v.options) else \
+            (v.options[0].key if v.options else "")
+        self.rescan.setText(v.rescan)
+        self._sync()
         self.show()
 
-    def _card(self, t: CompareTitle) -> QFrame:
+    def _option(self, i: int, o: FixOption) -> QFrame:
         f = QFrame()
-        f.setObjectName("cmpTitle")
-        f.setProperty("named", "true" if t.card_named else None)
-        f.setMinimumWidth(260)
+        f.setObjectName("fixOption")
+        f.setCursor(Qt.CursorShape.PointingHandCursor)
+        radio = QRadioButton(o.label)
+        radio.setStyleSheet("QRadioButton { font-weight: 600; }")
+        radio.setAccessibleDescription(o.what)
+        self.group.addButton(radio, i)
+        what = QLabel(o.what)
+        what.setWordWrap(True)
+        what.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
+        what.setContentsMargins(28, 0, 0, 0)
+        lay = QVBoxLayout(f)
+        lay.setContentsMargins(12, 8, 12, 10)
+        lay.setSpacing(2)
+        lay.addWidget(radio)
+        lay.addWidget(what)
+        f.mousePressEvent = lambda _e, i=i: self._picked(i)
+        self.option_frames[o.key] = f
+        return f
+
+    def _picked(self, i: int) -> None:
+        if self.view is None or not 0 <= i < len(self.view.options):
+            return
+        self.selected = self.view.options[i].key
+        self._sync()
+        self.chosen.emit(self.selected)
+
+    def choose(self, key: str) -> None:
+        if self.view is not None and any(o.key == key for o in self.view.options):
+            self.selected = key
+            self._sync()
+
+    def _sync(self) -> None:
+        v = self.view
+        o = next((o for o in v.options if o.key == self.selected), None) if v else None
+        for k, f in self.option_frames.items():
+            f.setProperty("on", "true" if k == self.selected else None)
+            f.style().unpolish(f)
+            f.style().polish(f)
+        for i, b in enumerate(self.group.buttons()):
+            b.setChecked(v is not None and self.group.id(b) < len(v.options)
+                         and v.options[self.group.id(b)].key == self.selected)
+        changes = o.changes if o else []
+        self.change_lines.setText("<br>".join(
+            f'<span style="font-family:monospace; color:#E59A94; text-decoration:line-through">{_esc(a)}</span><br>'
+            f'<span style="font-family:monospace; color:#8FE0B0">{_esc(b)}</span>' for a, b in changes))
+        self.change_box.setVisible(bool(changes))
+        self.rescan.setVisible(bool(changes) and bool(v and v.rescan))
+        self.apply_row.setVisible(o is not None)
+        self.apply_btn.setText(v.busy if v and v.busy else (o.apply if o else ""))
+        self.apply_btn.setEnabled(not (v and v.busy))
+        self.apply_note.setText(v.note if v else "")
+
+    def set_result(self, text: str, can_undo: bool = True) -> None:
+        self.done_text.setText(text)
+        self.undo_link.setVisible(can_undo)
+        self.done.setVisible(bool(text))
+
+    def _side(self, t: CompareTitle) -> QFrame:
+        f = QFrame()
+        f.setObjectName("fixSide")
+        f.setProperty("odd", "true" if t.odd else None)
+        f.setMinimumWidth(240)
         f.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         lay = QVBoxLayout(f)
-        lay.setContentsMargins(14, 12, 14, 12)
-        lay.setSpacing(8)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
         name = QLabel(t.label)
-        name.setStyleSheet("font-weight: 600; font-size: 14px;")
+        name.setStyleSheet("font-weight: 600;")
+        name.setWordWrap(True)
         sub = QLabel(t.sub)
         sub.setFont(mono_font(sub.font(), 12))
         sub.setStyleSheet(f"color: {MUTED};")
-        top = QHBoxLayout()
-        top.setSpacing(10)
-        top.addWidget(name)
-        top.addWidget(sub, 1)
-        lay.addLayout(top)
+        sub.setWordWrap(True)
+        lay.addWidget(name)
+        lay.addWidget(sub)
         grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(4)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(3)
         for r, (cap, value, colour) in enumerate(t.rows):
             c = QLabel(cap)
-            c.setStyleSheet(f"color: {MUTED}; font-size: 13px;")
+            c.setStyleSheet("color: #8C939A; font-size: 13px;")
             v = QLabel(value)
             v.setWordWrap(True)
             v.setStyleSheet(f"color: {colour or SOFT}; font-size: 13px;")
@@ -279,35 +448,30 @@ class ComparePanel(QFrame):
             grid.addWidget(v, r, 1)
         grid.setColumnStretch(1, 1)
         lay.addLayout(grid)
-        buttons = QWidget()
-        flow = FlowLayout(buttons, spacing=8)
-        w = watch_button("Watch")
+        w = watch_button("Watch from the title card" if t.card_t is not None else "Watch from the start")
         w.setEnabled(bool(t.path))
         w.setToolTip(t.watch_tip)
         w.setAccessibleName(f"Watch {t.label}")
         w.clicked.connect(lambda _c=False, k=t.key: self.watch.emit(k))
-        flow.addWidget(w)
-        self.watch_buttons[t.key] = w
-        if t.fixes and t.title_index is not None:
-            ti = t.title_index
-            for kind, text, sig in (("keep", t.keep_text, self.keep), ("version", t.version_text, self.version),
-                                    ("extra", "Save as an extra", self.extra), ("skip", "Skip this title", self.skip),
-                                    ("pick", "Pick another episode", self.pick)):
-                if not text:
-                    continue
-                b = _button(text, primary=kind == "keep" and t.suggest_keep)
-                b.clicked.connect(lambda _c=False, s=sig, i=ti: s.emit(i))
-                flow.addWidget(b)
-                self.fix_buttons[(kind, ti)] = b
-        lay.addWidget(buttons)
-        buttons.setMinimumHeight(flow.heightForWidth(320))
-        if t.note:
-            n = QLabel(t.note)
-            n.setWordWrap(True)
-            n.setStyleSheet(f"color: {MUTED}; font-size: 12px;")
-            lay.addWidget(n)
+        row = QHBoxLayout()
+        row.addWidget(w)
+        row.addStretch(1)
+        lay.addLayout(row)
         lay.addStretch(1)
+        self.watch_buttons[t.key] = w
         return f
+
+
+def _esc(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _clear(lay) -> None:
+    while lay.count():
+        w = lay.takeAt(0).widget()
+        if w:
+            w.hide()            # deleteLater waits for the event loop; until then it would still draw
+            w.deleteLater()
 
 
 # ---------------------------------------------------------------------------
@@ -315,26 +479,31 @@ class ComparePanel(QFrame):
 # ---------------------------------------------------------------------------
 
 class SeasonCells(QWidget):
-    """One small cell per episode, painted, with a tooltip each. A duplicate cell can be clicked."""
+    """One small cell per episode, painted, with a tooltip each. Clicking a cell (or Enter on the
+    one with the keyboard focus, moved with the arrow keys) opens the fix panel: on its problem when
+    it's flagged, else on what's known about the episode."""
 
     clicked = Signal(int)        # the episode number
 
-    MIN_W, H, GAP = 46, 40, 4
+    MIN_W, H, GAP = 46, 44, 4
 
     def __init__(self):
         super().__init__()
         self.cells = []
+        self.focus_i = 0
+        self.selected: int | None = None     # the episode the panel shows, ringed
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def set_cells(self, cells) -> None:
         self.cells = list(cells)
+        self.focus_i = min(self.focus_i, max(0, len(self.cells) - 1))
         self.updateGeometry()
         self.setFixedHeight(self.heightForWidth(max(self.width(), 600)))
-        summary = "; ".join(c.tip for c in self.cells if c.state in ("duplicate",)) or ""
-        self.setAccessibleName("Episodes of the season")
-        self.setAccessibleDescription(summary)
+        flagged = [c.tip for c in self.cells if c.state in FLAGGED]
+        self.setAccessibleName("Episodes of the season. Arrow keys move, Enter opens.")
+        self.setAccessibleDescription(" ".join(flagged))
         self.update()
 
     def columns(self, w: int) -> int:
@@ -353,7 +522,7 @@ class SeasonCells(QWidget):
     def heightForWidth(self, w):  # noqa: N802
         cols = self.columns(w)
         rows = (len(self.cells) + cols - 1) // cols if self.cells else 0
-        return max(0, rows * (self.H + self.GAP) - self.GAP)
+        return max(0, rows * (self.H + self.GAP) - self.GAP + 4)
 
     def sizeHint(self):  # noqa: N802
         return QSize(600, self.heightForWidth(600))
@@ -365,9 +534,9 @@ class SeasonCells(QWidget):
             self.setFixedHeight(h)
 
     def _rects(self) -> list[QRectF]:
-        cols = self.columns(self.width())
-        cw = (self.width() - self.GAP * (cols - 1)) / cols
-        return [QRectF((i % cols) * (cw + self.GAP), (i // cols) * (self.H + self.GAP), cw, self.H)
+        cols = self.columns(self.width() - 4)
+        cw = (self.width() - 4 - self.GAP * (cols - 1)) / cols
+        return [QRectF(2 + (i % cols) * (cw + self.GAP), 2 + (i // cols) * (self.H + self.GAP), cw, self.H)
                 for i in range(len(self.cells))]
 
     def paintEvent(self, _e):  # noqa: N802
@@ -377,22 +546,28 @@ class SeasonCells(QWidget):
         small = QFont(self.font())
         small.setPixelSize(10)
         small.setWeight(QFont.Weight.DemiBold)
-        for c, r in zip(self.cells, self._rects()):
+        for i, (c, r) in enumerate(zip(self.cells, self._rects())):
             fill, border, text, _legend = CELL_LOOK[c.state]
-            rr = r.adjusted(0.5, 0.5, -0.5, -0.5)
-            pen = QPen(QColor(border), 1)
+            flagged = c.state in FLAGGED
+            rr = r.adjusted(1, 1, -1, -1) if flagged else r.adjusted(0.5, 0.5, -0.5, -0.5)
+            pen = QPen(QColor(border), 2 if flagged else 1)
             if c.state == "free":
                 pen.setStyle(Qt.PenStyle.DashLine)
             p.setPen(pen)
             p.setBrush(QColor(fill) if fill else Qt.BrushStyle.NoBrush)
             p.drawRoundedRect(rr, 6, 6)
+            if c.number == self.selected or (self.hasFocus() and i == self.focus_i):
+                ring = QPen(QColor(TEXT if c.number == self.selected else LINK), 2)
+                p.setPen(ring)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRoundedRect(r.adjusted(-1.5, -1.5, 1.5, 1.5), 7, 7)
             p.setPen(QColor(text))
             p.setFont(num)
-            top = r.adjusted(0, 3, 0, -r.height() / 2 + 3) if c.mark else r
+            top = r.adjusted(0, 4, 0, -r.height() / 2 + 3) if c.mark else r
             p.drawText(top, Qt.AlignmentFlag.AlignCenter, str(c.number))
             if c.mark:
                 p.setFont(small)
-                p.drawText(r.adjusted(0, r.height() / 2 - 1, 0, -3), Qt.AlignmentFlag.AlignCenter, c.mark)
+                p.drawText(r.adjusted(0, r.height() / 2 - 1, 0, -4), Qt.AlignmentFlag.AlignCenter, c.mark)
         p.end()
 
     def cell_at(self, pos) -> int | None:
@@ -409,12 +584,39 @@ class SeasonCells(QWidget):
             return
         c = self.cells[i]
         QToolTip.showText(e.globalPosition().toPoint(), c.tip, self)
-        self.setCursor(Qt.CursorShape.PointingHandCursor if c.state == "duplicate" else Qt.CursorShape.ArrowCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor if c.state in FLAGGED or c.holders
+                       else Qt.CursorShape.ArrowCursor)
 
     def mousePressEvent(self, e):  # noqa: N802
         i = self.cell_at(e.position().toPoint())
-        if i is not None and self.cells[i].state == "duplicate":
+        if i is not None:
+            self.focus_i = i
             self.clicked.emit(self.cells[i].number)
+
+    def keyPressEvent(self, e):  # noqa: N802
+        if not self.cells:
+            return super().keyPressEvent(e)
+        cols = self.columns(self.width() - 4)
+        step = {Qt.Key.Key_Left: -1, Qt.Key.Key_Right: 1, Qt.Key.Key_Up: -cols, Qt.Key.Key_Down: cols}.get(e.key())
+        if step is not None:
+            self.focus_i = max(0, min(len(self.cells) - 1, self.focus_i + step))
+            c = self.cells[self.focus_i]
+            r = self._rects()[self.focus_i]
+            QToolTip.showText(self.mapToGlobal(r.bottomLeft().toPoint()), c.tip, self)
+            self.update()
+            return
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.clicked.emit(self.cells[self.focus_i].number)
+            return
+        super().keyPressEvent(e)
+
+    def focusInEvent(self, e):  # noqa: N802
+        super().focusInEvent(e)
+        self.update()
+
+    def focusOutEvent(self, e):  # noqa: N802
+        super().focusOutEvent(e)
+        self.update()
 
 
 class SeasonGrid(QFrame):
@@ -477,7 +679,8 @@ class SeasonGrid(QFrame):
         for k in CELL_ORDER:
             fill, border, _text, words = CELL_LOOK[k]
             style = "dashed" if k == "free" else "solid"
-            sample = {"here": "T6", "disc": "D1", "library": "Lib", "duplicate": "×2", "free": "&nbsp;&nbsp;&nbsp;"}[k]
+            sample = {"here": "T6", "disc": "D1", "library": "Lib", "duplicate": "×2", "check": "?",
+                      "free": "&nbsp;&nbsp;&nbsp;"}[k]
             parts.append(f'<span style="background:{fill or "transparent"}; color:{CELL_LOOK[k][2]}; '
                          f'border:1px {style} {border};">&nbsp;{sample}&nbsp;</span>&nbsp;{words}: {counts[k]}')
         self.legend.setText(" &nbsp;&nbsp;&nbsp; ".join(parts))
@@ -485,7 +688,8 @@ class SeasonGrid(QFrame):
         lib = (f" and {st.library_files} file{'s' if st.library_files != 1 else ''} already in the season folder"
                if st.library_files else "")
         self.checked.setText(f"Checked against {discs}{lib}. A re-rip of a disc replaces its earlier rip. "
-                             "T is a title on this disc and D another disc's number.")
+                             "T is a title on this disc and D another disc's number. Click a ×2 or ? cell to fix it, "
+                             "or any other cell to see where it is.")
         self.show()
 
 

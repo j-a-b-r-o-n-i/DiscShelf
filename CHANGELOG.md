@@ -12,6 +12,17 @@
   main language, is recognised as a dub and kept as " - French" (or its language) rather
   than called a shorter cut, on the Match page and the Library page.
 - A season grid on the Match page shows where every episode of the season is.
+- Anything flagged on the Match page (a ×2 or ? cell, a row's badge, the line at the top, or
+  the Queue's needs-you card) opens one fix panel: what's wrong, both sides with Watch, the
+  fixes as choices that say what happens, and Undo. The rest opens what's known about it.
+- Two files already on the NAS for one episode, from a disc copied before duplicates were
+  checked, can be fixed from the Match page: keep one as the French (or second) version,
+  move it to Featurettes, set it aside, or swap them. The files are renamed with the Library
+  page's rename and the disc's records are updated; Undo reverses both.
+- A match that needs a check can have just its title card read; when the card agrees,
+  confirming is one click.
+- Discs without a disc number are numbered by the order they were ripped, and named by
+  their label.
 - Watch opens a ripped title in mpv or VLC, at its title card when the card was read.
 - Title cards are found up to 20 minutes into a title: the theme song is recognised by its
   sound and skipped, and reading stops at the first frame that names an episode. Settings

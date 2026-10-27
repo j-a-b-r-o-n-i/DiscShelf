@@ -94,34 +94,54 @@ including a two-part title that overlaps another. It also looks across the seaso
 
 Each title involved is marked "check" with a sentence naming the other ("Title 26 is also
 S01E20 “Markets”."), and it isn't copied, even during a rip, until the problem is settled.
-A title already on the NAS keeps its match. The red box at the top of the Match page lists
-each problem; **Compare** shows the titles side by side with their length, playlist, size,
-what their audio languages are, what their title cards read and where they are now, and offers:
+A title already on the NAS keeps its match.
 
-- **This is …**: the title keeps the episode, and the other is skipped until you pick its
-  episode.
-- **Keep as a second version**: both keep the episode, and this file gets its language
-  (" - French", when it has no audio in the disc's main language and the other title does),
-  " - Short cut" (when it's more than 5 seconds shorter) or " - Version 2" in its name, so
-  Plex offers the two under Play Version. For a dub the button reads **Keep as the French
-  version**.
-- **Save as an extra**: it goes to `Featurettes` as "<episode> (French)" or
-  "<episode> (short cut)".
-- **Skip this title**: it isn't copied, and the other title keeps the episode.
-- **Pick another episode** opens the title's picker.
+**Fixing what's flagged.** Anything marked red or amber on the Match page opens the fix
+panel: a ×2 or ? cell in the season grid, a row's Check or duplicate badge, the line at the
+top of the page ("Fix it", then "Next one"), and the Queue's needs-you card. The panel says
+what's wrong in a sentence, shows each side (length, audio languages, what its title card
+read, where it is now) with Watch, and lists the fixes as choices that each say what will
+happen, the suggested one marked. The button names the action ("Rename 1 file", "Confirm
+the match"). Afterwards a green line says what was done, with Undo, and the panel moves on
+to the next problem; ‹ and › step between them. Clicking anything that isn't flagged opens
+the same panel as what's known about it: where the episode is, how it was matched, and
+Watch. In the grid the arrow keys move between cells and Enter opens one.
 
-**Read both title cards** reads just those titles. A card is judged on its own here,
-since two titles showing the same name would otherwise be taken for the show's own text.
-When one title has no audio in the disc's main language, the panel says it's probably the
-episode dubbed in that language; some discs carry a dubbed copy of one episode as a bonus.
-Otherwise, when both read the same name and one is shorter, it says the shorter one is
-probably a second cut. The disc's main language is the first audio language you keep, or
-else the one most titles play first.
+The fixes depend on what's wrong:
+
+- **Two titles of this disc on one episode.** Keep one (the other is skipped until you pick
+  its episode), keep both as versions (the file gets its language, " - French", when it has
+  no audio in the disc's main language and the other does, else " - Short cut" when it's
+  more than 5 seconds shorter, else " - Version 2"; Plex offers them under Play Version),
+  save one as an extra in `Featurettes` as "<episode> (French)" or "<episode> (short
+  cut)", skip it, read their title cards first, or pick another episode.
+- **Two files already on the NAS for one episode**, from a disc copied before duplicates
+  were checked (both from another disc of the season, or this disc's own copied titles):
+  keep the odd one (a dub, then the shorter, then the " (2)" copy) as the French version or
+  a second version, move it to `Featurettes`, set it aside in "<show>/Set aside/" (which
+  holds a `.plexignore`, so Plex skips it; nothing is deleted), or swap the two so the other
+  becomes the version. The panel lists the old and new names, and can ask Plex to rescan the
+  season folder. The renames go through the Library page's rename, so subtitles and other
+  sidecars move with the file and nothing is overwritten. The job that copied the file is
+  updated too (its file name, version, or extra), so the season check stops flagging it and
+  History stays right. Undo puts back both the names and the job's records. These undo logs
+  are kept apart from the Library page's, so its "Undo last rename" never undoes one of
+  these without its records.
+- **A match that needs a check** (a running-time guess, an unclear title card): confirm
+  it, read its title card first, pick another episode, or skip the title. Reading reads
+  just that title; when the card names the matched episode, Confirm says "(its card
+  agrees)" and is chosen for you.
+
+A card read for comparing is judged on its own, since two titles showing the same name
+would otherwise be taken for the show's own text. The disc's main language is the first
+audio language you keep, or else the one most titles play first.
 
 **The season grid** below the matches has a cell per episode of the season: on this disc
 (T and the title number), on another disc (D and its number), in the library (Lib), on more
-than one title (×2), or no title yet (a dashed outline). Hover a cell to see where it is;
-click a ×2 cell to compare its titles.
+than one title or file (×2), a match that needs a check (? and the title), or no title yet
+(a dashed outline). Hover a cell to see where it is. A disc with no number of its own is
+numbered by the order the season's discs were ripped, and named by its label in sentences
+("disc 1, First Half").
 
 **Watch.** The ▶ button on each title opens it in a video player: the ripped file, or its
 checked copy on the NAS once the local file is gone. It's available once the title is

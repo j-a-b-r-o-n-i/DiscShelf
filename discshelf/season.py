@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import collections
 import copy as _copy
+import difflib
 import os
 import posixpath
 import re
@@ -39,13 +40,18 @@ class Holder:
     source: str = ""             # the title's playlist or stream file
     size_bytes: int = 0
     path: str = ""               # a file that plays it, "" when none is known
+    dest_rel: str = ""           # its file under the destination, once copied (a library file's own path)
+    audio: list[str] = field(default_factory=list)   # audio languages, ISO 639-2, in stream order
+    main: str = ""               # its disc's main audio language
+    source_of_match: str = ""    # Match.source: "card" | "discdb" | "list" | "runtime" | "manual"
+    disc_no: int | None = None   # the other disc's number, given or by rip order
 
     def phrase(self) -> str:
         """Where it is, after "on" or "in": "title 6", "disc 1 title 7", "the library"."""
         if self.where == "here":
             return f"title {self.title_index}"
         if self.where == "disc":
-            return f"{self.disc} title {self.title_index}"
+            return f"{self.disc}, title {self.title_index}" if "," in self.disc else f"{self.disc} title {self.title_index}"
         return "the library"
 
     def at(self) -> str:
@@ -63,24 +69,40 @@ class Holder:
 
 @dataclass
 class Problem:
-    """Titles on this disc that hold an episode another title or file also holds."""
+    """Something on the Match page that needs a look.
+
+    kind "duplicate": titles of this disc hold an episode another title or file also holds; they
+    are held back until it's settled. kind "nas": every file holding the episode is already on
+    the NAS (another disc's, or this disc's locked titles), so the fix renames files there.
+    kind "check": one title's match is unsure (titles holds it, numbers its episode, if any)."""
     season: int
     numbers: list[int]           # the episodes it covers, more than one for a two-part title
     name: str                    # the first episode's name, "" when unknown
     titles: list[int]            # this disc's titles involved
     others: list[Holder]         # the season's other discs and library files that hold it too
     text: str                    # one sentence
+    kind: str = "duplicate"
+    sides: list[Holder] = field(default_factory=list)   # "nas": every file holding it, this disc's included
 
     @property
     def key(self) -> str:
-        return f"{self.season}:{self.numbers[0]}"
+        if self.kind == "check":
+            return f"check:{self.titles[0]}"
+        return f"{self.kind}:{self.season}:{self.numbers[0]}"
 
     @property
     def code(self) -> str:
+        if not self.numbers:
+            return ""
         return ep_code(self.season, self.numbers[0], self.numbers[-1] if len(self.numbers) > 1 else None)
 
     def episode_text(self) -> str:
         return f"{self.code} “{self.name}”" if self.name else self.code
+
+    @property
+    def flagged(self) -> str:
+        """"error" for a duplicate, "warn" for a check."""
+        return "warn" if self.kind == "check" else "error"
 
 
 @dataclass
@@ -89,9 +111,10 @@ class Cell:
     season: int
     number: int
     title: str
-    state: str                   # "free" | "here" | "disc" | "library" | "duplicate"
-    mark: str                    # the short text in the cell under the number: "T6", "D1", "Lib", "×2", ""
-    tip: str                     # one sentence for the tooltip
+    state: str                   # "free" | "here" | "disc" | "library" | "duplicate" | "check"
+    mark: str                    # the short text in the cell under the number: "T6", "D1", "Lib", "×2", "? T19", ""
+    problem: str = ""            # the key of the problem it shows, "" when nothing's wrong
+    tip: str = ""                # one sentence for the tooltip
     holders: list[Holder] = field(default_factory=list)
 
 
@@ -149,10 +172,39 @@ def same_disc(a: Job, b: Job) -> bool:
     return a.disc_number is not None and a.disc_number == b.disc_number
 
 
-def disc_name(job: Job) -> str:
-    if job.disc_number:
-        return f"disc {job.disc_number}"
+def disc_name(job: Job, number: int | None = None) -> str:
+    """How a disc is named in a sentence: "disc 1", "disc 1, First Half" when its label says more
+    than the show and the disc's number, else by its label."""
+    n = job.disc_number or number
+    words = label_words(job)
+    if n:
+        return f"disc {n}, {words}" if words else f"disc {n}"
     return f"the disc “{job.disc_label}”" if job.disc_label else "another disc"
+
+
+def label_words(job: Job) -> str:
+    """What a disc's volume label says besides the show, season and disc number:
+    "Bluey S1 First Half" → "First Half"; "BLUEY_S1_D1" → ""."""
+    show = {w.casefold() for w in re.findall(r"[A-Za-z0-9']+", job.show or "")}
+    words = " ".join(w for w in re.sub(r"[_.]+", " ", job.disc_label or "").split() if w.casefold() not in show)
+    words = re.sub(r"\b(?:S(?:EASON)?\s?\d{1,2}|D(?:ISC)?\s?\d{1,2}|VOL(?:UME)?\s?\d{1,2})\b", " ", words,
+                   flags=re.IGNORECASE)
+    words = re.sub(r"\s+", " ", words).strip(" -")
+    return words if re.search(r"[A-Za-z]{3}", words) else ""
+
+
+def disc_numbers(jobs: list[Job]) -> dict[str, int]:
+    """Each disc's number: its own when it has one, else its place in the order the season's discs
+    were ripped, skipping numbers other discs already carry."""
+    taken = {j.disc_number for j in jobs if j.disc_number}
+    out = {j.id: j.disc_number for j in jobs if j.disc_number}
+    n = 0
+    for j in sorted((j for j in jobs if not j.disc_number), key=lambda j: j.created):
+        n += 1
+        while n in taken:
+            n += 1
+        out[j.id] = n
+    return out
 
 
 def kept_titles(job: Job) -> set[int]:
@@ -174,24 +226,27 @@ def match_episodes(m: Match, season: int | None) -> list[tuple[int, int]]:
     return [(s, n) for n in range(m.episode.number, end + 1)]
 
 
-def title_holders(job: Job, where: str = "here", playable=None) -> list[Holder]:
+def title_holders(job: Job, where: str = "here", playable=None, number: int | None = None) -> list[Holder]:
     """A holder for each episode each kept title of the job is matched to. playable(job, ti),
-    when given, names a file that plays the title."""
+    when given, names a file that plays the title; number is the disc's number by rip order."""
     keep = kept_titles(job)
     titles = {t.index: t for t in job.titles}
     files = {f.title_index: f for f in job.files}
+    main = main_lang(job)
     out = []
     for m in job.matches:
         if m.title_index not in keep:
             continue
         t, f = titles.get(m.title_index), files.get(m.title_index)
         path = playable(job, m.title_index) if playable else ""
+        verified = f is not None and f.state == "verified"
         for s, n in match_episodes(m, job.season):
-            out.append(Holder(s, n, where, m.title_index, job.id, disc_name(job) if where == "disc" else "",
-                              version=m.version, on_nas=f is not None and f.state == "verified",
+            out.append(Holder(s, n, where, m.title_index, job.id, disc_name(job, number) if where == "disc" else "",
+                              version=m.version, on_nas=verified,
                               length_s=t.duration_s if t else 0, source=t.source if t else "",
                               size_bytes=(f.size_bytes if f and f.size_bytes else (t.size_bytes if t else 0)),
-                              path=path or ""))
+                              path=path or "", dest_rel=f.dest_rel if verified else "", audio=audio_langs(t),
+                              main=main, source_of_match=m.source, disc_no=job.disc_number or number))
     return out
 
 
@@ -278,7 +333,7 @@ def library_holders(rels: list[str], known: set[str], season: int, destination: 
         version = _file_version(name)
         for k in range(n, (end if end and end >= n else n) + 1):
             out.append(Holder(s, k, "library", name=name, version=version, on_nas=True,
-                              path=os.path.join(destination, rel) if destination else ""))
+                              path=os.path.join(destination, rel) if destination else "", dest_rel=rel))
     return out
 
 
@@ -338,6 +393,75 @@ def find_problems(mine: list[Holder], others: list[Holder], names: dict[tuple[in
         out.append(p)
     out.sort(key=lambda p: (p.season, p.numbers[0]))
     return out
+
+
+def find_nas_duplicates(mine: list[Holder], others: list[Holder], problems: list[Problem],
+                        names: dict[tuple[int, int], str] | None = None) -> list[Problem]:
+    """Episodes held by two files already on the NAS with the same version, where no title of this
+    disc that could still change is involved: another disc's pair (copied before duplicates were
+    checked), a pair of this disc's own copied titles, or a library file and a copied title.
+    Such a pair is fixed by renaming files on the NAS. A duplicate problem whose titles here are
+    all copied becomes one of these."""
+    names = names or {}
+    live = {(p.season, n) for p in problems for n in p.numbers if p.kind == "duplicate"
+            and any(not any(h.title_index == t and h.on_nas for h in mine) for t in p.titles)}
+    by: dict[tuple, list[Holder]] = collections.defaultdict(list)
+    for h in mine + others:
+        if h.on_nas and h.dest_rel:
+            by[(h.season, h.number, h.version.casefold())].append(h)
+    out = []
+    for (season, number, _v), hs in sorted(by.items()):
+        if len(hs) < 2 or (season, number) in live:
+            continue
+        name = names.get((season, number), "")
+        p = Problem(season, [number], name, sorted(h.title_index for h in hs if h.where == "here"),
+                    [h for h in hs if h.where != "here"], "", kind="nas", sides=hs)
+        p.text = nas_text(p)
+        out.append(p)
+    return out
+
+
+def nas_text(p: Problem) -> str:
+    n = len(p.sides)
+    return f"{'Two' if n == 2 else n} files on the NAS are {p.episode_text()}."
+
+
+def find_checks(job: Job, locked: set[int] = frozenset()) -> list[Problem]:
+    """One problem per title whose match needs a check and isn't held as a duplicate."""
+    keep = kept_titles(job)
+    out = []
+    for m in sorted(job.matches, key=lambda m: m.title_index):
+        if (m.confidence != "check" or m.confirmed or m.held or m.title_index in locked
+                or m.title_index not in keep or m.target not in ("episode", "skip")):
+            continue
+        e = m.episode if m.target == "episode" else None
+        season = (e.season if e and e.season is not None else job.season) or 0
+        p = Problem(season, [e.number] if e else [], e.title if e else "", [m.title_index], [], "", kind="check")
+        p.text = check_title(m)
+        out.append(p)
+    return out
+
+
+def check_title(m: Match) -> str:
+    """The panel's heading for a match that needs a check."""
+    ti = m.title_index
+    if m.target != "episode" or m.episode is None:
+        return f"Title {ti} has no episode yet"
+    return {"runtime": f"Title {ti} was matched by its running time only",
+            "card": f"Title {ti}'s title card isn't clear",
+            "list": f"Title {ti}'s place in the episode list needs a check",
+            "discdb": f"TheDiscDB's match for title {ti} needs a check"}.get(m.source, f"Title {ti}'s match needs a check")
+
+
+def card_agrees(text: str, title: str) -> bool:
+    """A title card's text names this episode, allowing for OCR's odd letters."""
+    ocr = str.maketrans("0158", "olsb")      # digits OCR reads for letters
+    a, b = _fold(text or "").translate(ocr), _fold(title or "").translate(ocr)
+    if not a or not b:
+        return False
+    if a == b or (len(b) >= 4 and b in a):
+        return True
+    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.8
 
 
 def problem_text(p: Problem) -> str:
@@ -599,7 +723,8 @@ def season_status(job: Job, mine: list[Holder], others: list[Holder], episodes: 
         return SeasonStatus(None, problems, [], taken, dict(holders), "", discs, library_count)
     names = {e.number: e.title for e in episodes if e.season in (None, season)}
     numbers = sorted(set(names) | {n for s, n in holders if s == season})
-    bad = {(p.season, n) for p in problems for n in p.numbers}
+    bad = {(p.season, n): p.key for p in problems if p.kind != "check" for n in p.numbers}
+    unsure = {(p.season, n): p for p in problems if p.kind == "check" for n in p.numbers}
     cells = []
     counts = collections.Counter()
     for n in numbers:
@@ -607,15 +732,17 @@ def season_status(job: Job, mine: list[Holder], others: list[Holder], episodes: 
         hs = holders.get(key, [])
         versions = collections.Counter(h.version for h in hs)
         dup = key in bad or any(c > 1 for c in versions.values())
+        problem = bad.get(key, "")
         if dup:
             state, mark = "duplicate", f"×{len(hs)}"
+        elif key in unsure:
+            state, mark, problem = "check", f"? T{unsure[key].titles[0]}", unsure[key].key
         elif any(h.where == "here" for h in hs):
             h = next(h for h in hs if h.where == "here")
             state, mark = "here", f"T{h.title_index}"
         elif any(h.where == "disc" for h in hs):
             h = next(h for h in hs if h.where == "disc")
-            num = re.match(r"disc (\d+)$", h.disc)
-            state, mark = "disc", f"D{num.group(1)}" if num else "Disc"
+            state, mark = "disc", f"D{h.disc_no}" if h.disc_no else "Disc"
         elif hs:
             state, mark = "library", "Lib"
         else:
@@ -629,14 +756,19 @@ def season_status(job: Job, mine: list[Holder], others: list[Holder], episodes: 
                           for h in hs])
             tip = f"{code}: {where}."
             if dup:
-                tip = f"{code} is on {len(hs)} titles: {where}."
+                tip = f"{code} is on {len(hs)} titles: {where}. Click to fix."
+            elif state == "check":
+                tip = f"{code}: {where}. Its match needs a check. Click to fix."
         else:
             tip = f"{code}: no title yet."
-        cells.append(Cell(season, n, title, state, mark, tip, hs))
+        cells.append(Cell(season, n, title, state, mark, problem, tip, hs))
     parts = [f"{len(numbers)} episodes"]
     if counts["duplicate"]:
         k = counts["duplicate"]
         parts.append(f"{k} {'is' if k == 1 else 'are'} on more than one title")
+    if counts["check"]:
+        k = counts["check"]
+        parts.append(f"{k} {'needs' if k == 1 else 'need'} a check")
     if counts["free"]:
         parts.append(f"{counts['free']} with no title yet")
     summary = ". ".join([f"Season {season}: " + ", ".join(parts)]) + "."
@@ -677,9 +809,10 @@ class SeasonChecks:
         except Exception:  # noqa: BLE001 -- unreadable job files: check this disc on its own
             jobs = []
         mates = season_jobs(job, [j for j in jobs if self._layout(j) != "movie"])
+        numbers = disc_numbers([job] + mates)
         others = []
         for j in mates:
-            others += title_holders(j, "disc", getattr(self, "playable", None))
+            others += title_holders(j, "disc", getattr(self, "playable", None), numbers.get(j.id))
         known = {f.dest_rel for j in jobs if same_season(job, j) for f in j.files if f.dest_rel}
         try:
             rels = self._library_rels(job)
@@ -708,6 +841,20 @@ class SeasonChecks:
         apply_holds(job.matches, held_notes(problems), self._locked(job))
         return problems
 
+    def season_problems(self, job: Job, others: list[Holder], problems: list[Problem]) -> list[Problem]:
+        """Everything the Match page offers to fix, in order: duplicates that hold titles back, files
+        on the NAS that share an episode, then matches that need a check. Hold job_lock."""
+        mine = title_holders(job, "here")
+        names = self._season_names(job)
+        nas = find_nas_duplicates(mine, others, problems, {**self._other_names(job), **names})
+        nas_keys = {(p.season, p.numbers[0]) for p in nas}
+        live = [p for p in problems if not (len(p.numbers) == 1 and (p.season, p.numbers[0]) in nas_keys)]
+        return live + nas + find_checks(job, self._locked(job))
+
+    def _other_names(self, job: Job) -> dict[tuple[int, int], str]:
+        eps = getattr(self, "_season_eps", {}).get(job.show_id, []) if job.show_id is not None else []
+        return {(e.season, e.number): e.title for e in eps if e.title}
+
     def season_status(self, job: Job, refresh: bool = False) -> SeasonStatus:
         """The season as the Match page shows it: problems, the grid, and which episodes are taken.
         With refresh, the other discs and the library are looked at again (slow on a share)."""
@@ -726,7 +873,7 @@ class SeasonChecks:
             episodes = [e for e in self._season_eps.get(job.show_id, []) if e.season == job.season]
         with self.job_lock:
             before = [(m.held, m.confidence) for m in job.matches]
-            problems = self.apply_season(job, others)
+            problems = self.season_problems(job, others, self.apply_season(job, others))
             changed = before != [(m.held, m.confidence) for m in job.matches]
             mine = title_holders(job, "here", getattr(self, "playable", None))
             if changed:

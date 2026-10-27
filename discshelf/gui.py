@@ -43,7 +43,9 @@ except ImportError:                                  # the classifier is optiona
 from .models import Disc, Drive, Episode, HdrPolicy, Job, Match, RippedFile, Sample, Title, TitleProgress
 from .picker import PICKER_STYLE, EpisodePicker
 from . import season as seasonmod
-from .seasonui import CompareTitle, ComparePanel, ProblemsBanner, SeasonGrid, WatchChooser, watch_button
+from . import naming, nasfix
+from .seasonui import (ClickChip, CompareTitle, ComparePanel, FixOption, FixView, ProblemsBanner, SeasonGrid,
+                       WatchChooser, watch_button)
 from .taskbar import TaskbarProgress
 
 try:
@@ -2231,21 +2233,23 @@ class MatchPage(QWidget):
 
         # Problems: an episode on two titles of this disc, or already on another disc or in the library.
         self.season_st = None                 # season.SeasonStatus of the open job
-        self.compare_key = ""                 # the problem being compared, "" for none
-        self.compare_reads: dict[int, tuple[str, float]] = {}
+        # The fix panel: what it shows is fix_sel, a problem's key, "ep:<season>:<number>" or "title:<n>".
+        self.fix_sel = ""
+        self.fix_order: list[str] = []        # the problems' keys when last shown, to move on after a fix
+        self.fix_choice: dict[str, str] = {}  # the fix chosen for each problem
+        self.fix_reads: dict[int, tuple[str, float]] = {}   # what the shown titles' cards read, alone
+        self.fix_done: tuple[str, object] | None = None    # (the last fix's result, its undo or None)
         self.problems = ProblemsBanner()
-        self.problems.compare.connect(self.open_compare)
+        self.problems.next.connect(self.next_problem)
         self.problems.hide()
         col.addWidget(self.problems)
         self.compare = ComparePanel()
-        self.compare.closed.connect(lambda: self.open_compare(""))
-        self.compare.keep.connect(lambda ti: self.fix("keep", ti))
-        self.compare.version.connect(lambda ti: self.fix("version", ti))
-        self.compare.extra.connect(lambda ti: self.fix("extra", ti))
-        self.compare.skip.connect(lambda ti: self.fix("skip", ti))
-        self.compare.pick.connect(self.open_picker)
-        self.compare.watch.connect(self.watch_compared)
-        self.compare.read_cards.connect(self.read_compared_cards)
+        self.compare.closed.connect(self.close_fix)
+        self.compare.apply.connect(self.apply_fix)
+        self.compare.chosen.connect(lambda k: self.fix_choice.__setitem__(self.fix_sel, k))
+        self.compare.undo.connect(self.undo_fix)
+        self.compare.step.connect(self.step_problem)
+        self.compare.watch.connect(self.watch_side)
         col.addWidget(self.compare)
 
         # Fields
@@ -2488,7 +2492,7 @@ class MatchPage(QWidget):
         self.fill_dest()
         self.fill_fields()
         if not same:
-            self.compare_key, self.compare_reads = "", {}
+            self.fix_sel, self.fix_reads, self.fix_done, self.fix_order = "", {}, None, []
             self.season_st = None
             self.set_season_note("")
         self.fill_table()
@@ -2558,18 +2562,22 @@ class MatchPage(QWidget):
         self.table.setColumnHidden(3, film)
 
     def badge_cell(self, m: Match, dup: str = "") -> QWidget:
+        unsure = m.confidence == "check" and not m.confirmed and m.title_index not in self._locked
         if dup:
-            c = chip(dup, "bad")
-        elif m.target == "skip":
-            c = chip("Skipped", "plain")
+            c = ClickChip(dup, "bad")
+        elif m.target == "skip" and not unsure:
+            c = ClickChip("Skipped", "plain")
         elif m.confidence == "check":
-            c = chip("Check", "warn")
+            c = ClickChip("Check", "warn")
         elif m.confidence == "manual":
-            c = chip("Picked by you", "info")
+            c = ClickChip("Picked by you", "info")
         elif m.target == "extra":
-            c = chip("Extra", "plain")
+            c = ClickChip("Extra", "plain")
         else:
-            c = chip("Close match", "good")
+            c = ClickChip("Close match", "good")
+        flagged = bool(dup) or unsure
+        c.clicked.connect(lambda ti=m.title_index: self.open_fix_for_title(ti))
+        c.setAccessibleName(f"Title {m.title_index}: {c.text()}. " + ("Opens the fix." if flagged else "Opens what's known."))
         if m.confidence == "check" and m.confirmed and m.target != "skip" and not dup:
             set_chip(c, "Confirmed", "good")
         if m.version and m.target == "episode" and not dup:
@@ -2577,8 +2585,8 @@ class MatchPage(QWidget):
         w = QWidget()
         lay = hbox(spacing=10, margins=(8, 4, 12, 4))
         lay.addWidget(c, 0, Qt.AlignmentFlag.AlignVCenter)
-        if m.note:
-            c.setToolTip(m.note)
+        c.setToolTip(f"{m.note} Click to fix.".strip() if flagged else
+                     (f"{m.note} " if m.note else "") + "Click to see what's known about it.")
         lay.addStretch(1)
         w.setLayout(lay)
         return w
@@ -3086,7 +3094,7 @@ class MatchPage(QWidget):
                 self.set_saved(f"Matched {plural(n, 'title')} from {'its' if n == 1 else 'their'} title cards."
                                if n else "No title card could be read. Enter the episode list from the case instead.")
             if self.job is job:
-                self.compare_reads = {}
+                self.fix_reads = {}
                 self.fill_table()
 
         cancel = self.cards_cancel = threading.Event()
@@ -3269,40 +3277,522 @@ class MatchPage(QWidget):
                 out[ti] = (chip_text, f"{p.name or p.code} is also {where}.")
         return out
 
-    def problem(self, key: str | None = None):
-        key = self.compare_key if key is None else key
+    # -- the fix panel --------------------------------------------------------
+    def problems_list(self) -> list:
         st = self.season_st
-        return next((p for p in st.problems if p.key == key), None) if st is not None and key else None
+        return list(st.problems) if st is not None and self.layout() != "movie" else []
+
+    def problem(self, key: str | None = None):
+        key = self.fix_sel if key is None else key
+        return next((p for p in self.problems_list() if p.key == key), None) if key else None
+
+    @staticmethod
+    def banner_phrase(p) -> str:
+        if p.kind == "nas":
+            return f"{p.episode_text()} is on {len(p.sides)} files on the NAS"
+        return p.text.rstrip(".")
 
     def fill_problems(self):
-        st = self.season_st
-        if st is None or not st.problems or self.layout() == "movie":
-            self.problems.hide()
-            self.compare.hide()
-            return
-        items = []
-        for p in st.problems:
-            held = [ti for ti in p.titles if ti not in self._locked]
-            if held:
-                effect = (f"{seasonmod._titles_text(held)} {'waits' if len(held) == 1 else 'wait'} until this is "
-                          "settled, so nothing is copied under the wrong name.")
+        probs = self.problems_list()
+        keys = [p.key for p in probs]
+        sel = self.fix_sel
+        if sel and sel.split(":")[0] in ("duplicate", "nas", "check") and sel not in keys:
+            # Fixed, or gone: move on to the next one in the order they were shown.
+            old = self.fix_order
+            after = old[old.index(sel) + 1:] if sel in old else []
+            nxt = next((k for k in after if k in keys), None) or (keys[0] if keys else "")
+            self.fix_sel, self.fix_reads = nxt, {}
+        self.fix_order = keys
+        if probs:
+            def low(t: str) -> str:
+                return t[:1].lower() + t[1:] if t.split(" ", 1)[0] in ("Title", "Titles", "Two") else t
+            a = self.banner_phrase(probs[0])
+            if len(probs) == 1:
+                line = f"{a}."
+            elif len(probs) == 2:
+                line = f"Two things need a look: {low(a)}, and {low(self.banner_phrase(probs[1]))}."
             else:
-                effect = ("Both are already on the NAS, so their matches are locked." if len(p.titles) > 1 else
-                          "It's already on the NAS, so its match is locked.")
-            items.append((p.key, p.text, effect))
-        if self.compare_key and self.problem() is None:
-            self.compare_key = ""
-        self.problems.set_problems(items, self.compare_key)
-        self.fill_compare()
+                line = f"{len(probs)} things need a look. First, {low(a)}."
+            on = self.fix_sel in keys
+            self.problems.set_line(line, "Next one" if on and len(probs) > 1 else "Fix it")
+        else:
+            self.problems.set_line("", "")
+        self.render_fix()
 
-    def open_compare(self, key: str):
-        self.compare_key = key
-        self.compare_reads = {}
+    def next_problem(self):
+        keys = [p.key for p in self.problems_list()]
+        if not keys:
+            return
+        i = keys.index(self.fix_sel) + 1 if self.fix_sel in keys else 0
+        self.open_fix(keys[i % len(keys)])
+
+    def step_problem(self, d: int):
+        keys = [p.key for p in self.problems_list()]
+        if self.fix_sel in keys:
+            self.open_fix(keys[(keys.index(self.fix_sel) + d) % len(keys)])
+
+    def open_fix(self, sel: str):
+        self.fix_sel, self.fix_reads = sel, {}
         self.fill_problems()
-        if key:
+        if sel:
             scroll = self.stack.widget(1)
             if isinstance(scroll, QScrollArea):
                 scroll.ensureWidgetVisible(self.compare, 0, 40)
+
+    def open_fix_for_title(self, ti: int):
+        """The problem a title is part of (a duplicate before a check), else what's known about it."""
+        probs = self.problems_list()
+        p = next((p for p in probs if ti in p.titles and p.kind != "check"), None) or \
+            next((p for p in probs if ti in p.titles), None)
+        self.open_fix(p.key if p is not None else f"title:{ti}")
+
+    def close_fix(self):
+        self.fix_sel, self.fix_done, self.fix_reads = "", None, {}
+        self.fill_problems()
+
+    def grid_clicked(self, number: int):
+        st = self.season_st
+        if st is None:
+            return
+        cell = next((c for c in st.cells if c.number == number), None)
+        if cell is not None and cell.problem and self.problem(cell.problem) is not None:
+            self.open_fix(cell.problem)
+        else:
+            self.open_fix(f"ep:{st.season}:{number}")
+
+    def render_fix(self):
+        sel, job = self.fix_sel, self.job
+        cells = self.grid.cells
+        cells.selected = None
+        if job is None or (not sel and not self.fix_done):
+            self.compare.hide()
+            cells.update()
+            return
+        p = self.problem()
+        try:
+            if p is not None:
+                v = {"nas": self.view_nas, "check": self.view_check}.get(p.kind, self.view_duplicate)(p)
+                keys = [x.key for x in self.problems_list()]
+                v.step = (keys.index(p.key) + 1, len(keys))
+                cells.selected = p.numbers[0] if p.numbers else None
+            elif sel.startswith("ep:"):
+                _k, season, number = sel.split(":")
+                v = self.view_episode(int(season), int(number))
+                cells.selected = int(number)
+            elif sel.startswith("title:"):
+                v = self.view_title(int(sel.split(":")[1]))
+            else:
+                v = FixView("done", "Nothing else needs a look",
+                            "Every title has an episode or is skipped, and no episode is on two files.")
+        except Exception as exc:  # noqa: BLE001 -- the panel is a help; say what broke instead of failing the page
+            v = FixView("info", "This can't be shown", f"{exc}. Choose Close, then try again.")
+        if self.win.busy("fix"):
+            v.busy = "Working…"
+        self.compare.set_view(v)
+        text, undo = self.fix_done if self.fix_done else ("", None)
+        self.compare.set_result(text, undo is not None and not self.win.busy("fix"))
+        cells.update()
+
+    # -- what each side shows
+    def side_here(self, ti: int, lengths: list[int] | None = None, dub: bool = False, odd: bool = False) -> CompareTitle:
+        job = self.job
+        cards = self.card_status()
+        with self.win.lock():
+            m = next((x for x in job.matches if x.title_index == ti), None)
+            f = next((x for x in job.files if x.title_index == ti), None)
+        t, st = self.title_of(ti), cards.get(ti)
+        secs = t.duration_s if t else 0
+        size = (f.size_bytes if f and f.size_bytes else (t.size_bytes if t else 0))
+        sub = " · ".join(x for x in (t.source if t else "", fmt_len(secs) if secs else "",
+                                     fmt_size(size) if size else "") if x)
+        guess = m is not None and m.source in ("", "runtime") and m.confidence == "check"
+        rows = [("Matched by", self.SOURCE_WORDS.get(m.source if m else "", "Its running time"),
+                 "#F5C27A" if guess else "")]
+        if secs:
+            d = max(lengths or [secs]) - secs
+            rows.append(("Length", f"{fmt_len(secs)}, {d} s shorter" if d > seasonmod.SHORT_CUT_S else fmt_len(secs),
+                         "#F5C27A" if d > seasonmod.SHORT_CUT_S else ""))
+        langs = seasonmod.audio_langs(t)
+        if langs:
+            words = " and ".join(seasonmod.lang_name(c, t) for c in langs)
+            rows.append(("Audio", f"{words} only" if dub else words, "#F5C27A" if dub else ""))
+        if ti in self.fix_reads:
+            text, at = self.fix_reads[ti]
+            rows.append(("Title card", f"“{text}” at {fmt_len(int(at))}", "#8FE0B0"))
+        elif st is None or st.state in ("waiting", "stopped"):
+            rows.append(("Title card", "Not read yet", MUTED))
+        elif st.state == "reading":
+            rows.append(("Title card", "Reading…", "#A9D1F6"))
+        elif st.state == "read" and st.text:
+            at = f" at {fmt_len(int(st.t))}" if getattr(st, "t", None) is not None else ""
+            rows.append(("Title card", f"“{st.text}”{at}", "#8FE0B0" if st.sure else "#F5C27A"))
+        else:
+            rows.append(("Title card", "No episode name was found on screen", "#F5C27A"))
+        if ti in self._locked:
+            now = f"On the NAS as {os.path.basename(f.dest_rel)}" if f and f.dest_rel else "On the NAS"
+        elif f is not None:
+            now = "Ripped. It waits until this is settled." if m and m.held else "Ripped, not copied yet"
+        else:
+            now = "Not ripped yet"
+        rows.append(("Now", now, ""))
+        path = self.playable(ti)
+        card_t = self.card_time(ti, st)
+        return CompareTitle(key=f"here:{ti}", title_index=ti, label=f"Title {ti}", sub=sub, rows=rows, path=path,
+                            card_t=card_t, card_named=card_t is not None, odd=odd,
+                            watch_tip=self.watch_tip(path, card_t))
+
+    def side_holder(self, i: int, h, lengths: list[int], odd: bool = False) -> CompareTitle:
+        """A side for a holder: this disc's title, another disc's title, or a library file."""
+        dub = bool(h.main and h.audio and h.main not in h.audio)
+        if h.where == "here" and h.title_index is not None:
+            c = self.side_here(h.title_index, lengths, dub=dub, odd=odd)
+            c.key = f"side:{i}"
+            if h.dest_rel:
+                c.sub = os.path.basename(h.dest_rel)
+            return c
+        rows = []
+        if h.source_of_match:
+            rows.append(("Matched by", self.SOURCE_WORDS.get(h.source_of_match, "Its running time")
+                         .replace("this disc", "the disc"), ""))
+        if h.length_s:
+            d = max(lengths or [h.length_s]) - h.length_s
+            rows.append(("Length", f"{fmt_len(h.length_s)}, {d} s shorter" if d > seasonmod.SHORT_CUT_S
+                         else fmt_len(h.length_s), "#F5C27A" if d > seasonmod.SHORT_CUT_S else ""))
+        if h.audio:
+            words = " and ".join(seasonmod.lang_name(c) for c in h.audio)
+            rows.append(("Audio", f"{words} only" if dub else words, "#F5C27A" if dub else ""))
+        rows.append(("Now", "On the NAS" if h.on_nas else "Ripped, not copied yet", ""))
+        label = nasfix.describe(h) if h.where != "library" else "A file in the library"
+        sub = os.path.basename(h.dest_rel) if h.dest_rel else (h.name or h.source)
+        return CompareTitle(key=f"side:{i}", title_index=None, label=label, sub=sub, rows=rows, path=h.path,
+                            odd=odd, watch_tip=self.watch_tip(h.path, None))
+
+    def sides_of(self) -> list:
+        """The holders behind the panel's "side:<i>" keys, for Watch."""
+        p = self.problem()
+        if p is not None and p.kind == "nas":
+            return list(p.sides)
+        if p is not None and p.kind == "duplicate":
+            return list(p.others)
+        if self.fix_sel.startswith("ep:") and self.season_st is not None:
+            _k, s, n = self.fix_sel.split(":")
+            return list(self.season_st.holders.get((int(s), int(n)), []))
+        return []
+
+    def watch_side(self, key: str):
+        kind, _, rest = key.partition(":")
+        if kind == "here":
+            self.watch(int(rest))
+            return
+        sides = self.sides_of()
+        p = self.problem()
+        i = int(rest) - (len(p.titles) if p is not None and p.kind == "duplicate" else 0)
+        if 0 <= i < len(sides):
+            h = sides[i]
+            if h.where == "here" and h.title_index is not None:
+                self.watch(h.title_index)
+            else:
+                what = nasfix.describe(h)
+                self.watch(0, h.path, None, what[:1].lower() + what[1:])
+
+    # -- the views
+    def _reads_for(self, tis: list[int]) -> None:
+        if not self.fix_reads and tis:
+            get = getattr(self.win.ctl, "card_reads", None)
+            if get is not None:
+                try:
+                    self.fix_reads = get(self.job, list(tis))
+                except Exception:  # noqa: BLE001 -- the sides show the card status instead
+                    self.fix_reads = {}
+
+    def _unread(self, tis: list[int]) -> list[int]:
+        cards = self.card_status()
+        with self.win.lock():
+            local = {f.title_index for f in self.job.files if f.path and not f.local_deleted}
+        return [ti for ti in tis if ti in local and ti not in self.fix_reads
+                and (cards.get(ti) is None or cards[ti].state not in ("read", "none", "reading"))]
+
+    def odd_title(self, p) -> int:
+        """The title of this disc a duplicate's fix changes: a dub, then a shorter cut, then the later title."""
+        job = self.job
+        free = [t for t in p.titles if t not in self._locked] or list(p.titles)
+        return max(free, key=lambda t: (bool(seasonmod.dub_language(job, t, p)), seasonmod.is_short_cut(job, t, p), t))
+
+    def view_duplicate(self, p) -> FixView:
+        job = self.job
+        self._reads_for(p.titles)
+        name = p.name or p.code
+        odd = self.odd_title(p)
+        dub = seasonmod.dub_language(job, odd, p)
+        lengths = [self.title_of(t).duration_s for t in p.titles if self.title_of(t)] + \
+            [o.length_s for o in p.others if o.length_s]
+        sides = [self.side_here(t, lengths, dub=bool(dub) and t == odd, odd=t == odd) for t in p.titles]
+        sides += [self.side_holder(len(p.titles) + i, o, lengths) for i, o in enumerate(p.others)]
+        label = seasonmod.version_name(job, odd, p)
+        opts = []
+        keepers = [t for t in p.titles if t != odd and t not in self._locked]
+        if keepers:
+            k = keepers[0]
+            opts.append(FixOption("keep", f"Title {k} is {name}", f"Title {k} keeps it, and title {odd} is skipped "
+                                  "until you pick its episode.", f"Keep title {k}"))
+        opts.append(FixOption("version", f"Keep title {odd} as the {dub} version" if dub else
+                              f"Keep title {odd} as a second version",
+                              f"Both keep {name}, and title {odd}'s file gets “ - {label}” at the end of its name. "
+                              "Plex offers both under Play Version.", "Keep both"))
+        opts.append(FixOption("extra", f"Save title {odd} as an extra",
+                              f"It's copied to Featurettes as “{seasonmod.extra_name(job, odd, p)}”.", "Save as an extra"))
+        opts.append(FixOption("skip", f"Skip title {odd}", "It isn't copied, and the other keeps the episode.",
+                              f"Skip title {odd}"))
+        unread = self._unread(p.titles)
+        if unread:
+            many = len(unread) > 1
+            opts.append(FixOption("read", "Read their title cards first" if many else "Read its title card first",
+                                  "Reads just these titles, a few seconds each, so you can see which shows the "
+                                  "episode's name.", "Read the title cards" if many else "Read the title card"))
+        opts.append(FixOption("pick", f"Pick another episode for title {odd}",
+                              f"Opens the episode list for title {odd}, free episodes first.", "Open the episode list"))
+        suggest = "version" if dub or seasonmod.is_short_cut(job, odd, p) else ("keep" if keepers else "pick")
+        for o in opts:
+            if o.key == suggest:
+                o.label += " (suggested)"
+        hint_cards = dict(self.card_status())
+        for ti, (text, _t) in self.fix_reads.items():
+            hint_cards[ti] = SimpleNamespace(state="read", text=text, sure=False)
+        held = [t for t in p.titles if t not in self._locked]
+        effect = (f" {seasonmod._titles_text(held)} {'waits' if len(held) == 1 else 'wait'} until this is settled, "
+                  "so nothing is copied under the wrong name.") if held else ""
+        text = seasonmod.compare_hint(job, p, hint_cards) + effect
+        return FixView("error", p.text.rstrip("."), text, sides, opts, self.fix_choice.get(p.key, suggest),
+                       note="Undo is next to the result.")
+
+    def view_nas(self, p) -> FixView:
+        job = self.job
+        odd, kept = nasfix.odd_one(p.sides)
+        lengths = [h.length_s for h in p.sides if h.length_s]
+        sides = [self.side_holder(i, h, lengths, odd=h is odd) for i, h in enumerate(p.sides)]
+        scheme = naming.Scheme.from_config(self.win.cfg)
+        opts = []
+        for key, lab, what, suggested in nasfix.options(p):
+            try:
+                pl = nasfix.plan(p, key, scheme)
+            except ValueError:
+                continue
+            n = len(pl.moves)
+            opts.append(FixOption(key, lab + (" (suggested)" if suggested else ""), what,
+                                  f"Rename {n} file{'s' if n != 1 else ''}", pl.moves))
+        discs = {h.disc for h in p.sides if h.where == "disc"}
+        name = p.name or p.code
+        if all(h.where == "disc" for h in p.sides) and len(discs) == 1:
+            came = f"Both came from {next(iter(discs))}, and were copied before duplicates were checked."
+        elif all(h.where == "here" for h in p.sides):
+            came = "Both came from this disc and are already on the NAS, so their matches are locked."
+        else:
+            came = "Both are already on the NAS."
+        dub = nasfix.dub_language(odd, kept)
+        who = nasfix.describe(odd)
+        if dub:
+            why = (f" {who} has no {seasonmod.lang_name(odd.main)} audio, only {dub}, so it's probably {name} "
+                   f"dubbed in {dub}.")
+        elif odd.length_s and kept.length_s and kept.length_s - odd.length_s > seasonmod.SHORT_CUT_S:
+            why = f" {who} is {kept.length_s - odd.length_s} s shorter, so it's probably a second cut."
+        else:
+            why = ""
+        season_dir = os.path.basename(os.path.dirname(kept.dest_rel or odd.dest_rel))
+        rescan = (f"Ask Plex to rescan {season_dir} afterwards"
+                  if job.library and hasattr(self.win.ctl, "plex_scan_folder") else "")
+        return FixView("error", p.text.rstrip("."), came + why, sides, opts, self.fix_choice.get(p.key, "version"),
+                       note="Undo puts the names back.", rescan=rescan)
+
+    def view_check(self, p) -> FixView:
+        job = self.job
+        ti = p.titles[0]
+        with self.win.lock():
+            m = _copy.deepcopy(next((x for x in job.matches if x.title_index == ti), None))
+        self._reads_for([ti])
+        st = self.card_status().get(ti)
+        read = self.fix_reads.get(ti) or ((st.text, getattr(st, "t", None) or 0.0)
+                                          if st is not None and st.state == "read" and st.text else None)
+        ep = m.episode if m is not None and m.target == "episode" else None
+        agrees = bool(read and ep and seasonmod.card_agrees(read[0], ep.title))
+        name = ""
+        if ep is not None:
+            name = f"{seasonmod.ep_code(ep.season if ep.season is not None else job.season or 0, ep.number)} {ep.title}"
+        if read and ep:
+            at = f" at {fmt_len(int(read[1]))}" if read[1] else ""
+            text = (f"Its title card reads “{read[0]}”{at}, so it is {name}." if agrees else
+                    f"Its title card reads “{read[0]}”{at}, which isn't {ep.title}. Pick the episode it names.")
+        else:
+            text = m.note if m is not None and m.note else "Its match needs a check."
+        lengths = [self.title_of(ti).duration_s] if self.title_of(ti) else []
+        opts = []
+        if ep is not None:
+            path = dict(self.preview).get(ti, "")
+            where = f"It's copied as “{os.path.basename(path)}”" if path else "It's copied"
+            opts.append(FixOption("confirm", f"Confirm {name}" + (" (its card agrees)" if agrees else ""),
+                                  f"{where} and marked as checked by you.", "Confirm the match"))
+        if not read and self._unread([ti]):
+            opts.append(FixOption("read", "Read its title card first",
+                                  "Reads just this title, a few seconds." +
+                                  (f" If the card names {ep.title}, Confirm is chosen for you." if ep else ""),
+                                  "Read the title card"))
+        opts.append(FixOption("pick", "Pick another episode", f"Opens the episode list for title {ti}, free episodes "
+                              "first.", "Open the episode list"))
+        opts.append(FixOption("skip", "Skip this title", "It isn't copied.", f"Skip title {ti}"))
+        choice = self.fix_choice.get(p.key)
+        if agrees and choice in (None, "read"):
+            choice = "confirm"
+        if choice is None or not any(o.key == choice for o in opts):
+            choice = "read" if any(o.key == "read" for o in opts) else opts[0].key
+        v = FixView("warn", p.text, text, [self.side_here(ti, lengths)], opts, choice,
+                    note="Undo is next to the result.")
+        if self.win.busy("cards") and st is not None and st.state in ("waiting", "reading"):
+            v.busy = "Reading…"
+        return v
+
+    def view_episode(self, season: int, number: int) -> FixView:
+        st = self.season_st
+        hs = st.holders.get((season, number), []) if st is not None else []
+        cell = next((c for c in (st.cells if st is not None else []) if c.number == number), None)
+        name = cell.title if cell is not None else ""
+        lengths = [h.length_s for h in hs if h.length_s]
+        sides = [self.side_holder(i, h, lengths) for i, h in enumerate(hs)]
+        if not hs:
+            text = "No title of this disc or the season's other discs has it yet, and it isn't in the library."
+        else:
+            parts = []
+            for h in hs:
+                if h.where == "here":
+                    parts.append(f"on this disc as title {h.title_index}" +
+                                 (", already on the NAS" if h.title_index in self._locked else ""))
+                elif h.where == "disc":
+                    parts.append(f"on {h.phrase()}" + (", already on the NAS" if h.on_nas else ""))
+                else:
+                    parts.append(f"in the library as “{h.name}”")
+            text = f"It's {seasonmod._and(parts)}."
+        return FixView("info", f"{seasonmod.ep_code(season, number)} {name}".strip(), text, sides)
+
+    def view_title(self, ti: int) -> FixView:
+        job = self.job
+        with self.win.lock():
+            m = _copy.deepcopy(next((x for x in job.matches if x.title_index == ti), None))
+        if m is None or m.target == "skip":
+            text = "It's skipped, so it isn't copied."
+        elif m.target == "extra":
+            text = f"It's saved as an extra, “{m.extra_name}”, in {m.extra_folder}."
+        elif m.target == "feature":
+            text = "It's the film."
+        elif m.episode is None:
+            text = "It has no episode yet."
+        else:
+            e = m.episode
+            how = self.SOURCE_WORDS.get(m.source, "Its running time")
+            code = seasonmod.ep_code(e.season if e.season is not None else job.season or 0, e.number)
+            text = (f"It's {code} {e.title}" + (f", the {m.version} version" if m.version else "") +
+                    f". Matched by {how[:1].lower() + how[1:]}.")
+        lengths = [self.title_of(ti).duration_s] if self.title_of(ti) else []
+        return FixView("info", f"Title {ti}", text, [self.side_here(ti, lengths)])
+
+    # -- applying
+    def apply_fix(self, key: str):
+        p, job = self.problem(), self.job
+        if p is None or job is None or not key or self.win.busy("fix"):
+            return
+        self.fix_choice[p.key] = key
+        if key == "pick":
+            ti = p.titles[0] if p.kind == "check" else self.odd_title(p)
+            self.open_picker(ti)
+            return
+        if key == "read":
+            self.read_cards(only=set(self._unread(p.titles)) or set(p.titles))
+            self.render_fix()
+            return
+        if p.kind == "nas":
+            self.apply_nas(p, key)
+            return
+        with self.win.lock():
+            before = _copy.deepcopy(job.matches)
+        matches = _copy.deepcopy(before)
+        if p.kind == "check":
+            ti = p.titles[0]
+            if key == "confirm":
+                m = next(x for x in matches if x.title_index == ti)
+                m.confirmed = True
+                text = f"Title {ti} is {p.episode_text()}, confirmed by you."
+            else:
+                matches = seasonmod.fix_skip(matches, ti)
+                text = f"Title {ti} is skipped."
+        else:
+            odd = self.odd_title(p)
+            if key == "keep":
+                k = next(t for t in p.titles if t != odd and t not in self._locked)
+                matches = seasonmod.fix_keep(matches, k, p, self._locked)
+                text = f"Title {k} is {p.episode_text()}, and title {odd} is skipped until you pick its episode."
+            elif key == "version":
+                matches = seasonmod.fix_version(matches, job, odd, p)
+                v = next((m.version for m in matches if m.title_index == odd), "")
+                text = f"Title {odd} is kept as the “{v}” version of {p.episode_text()}."
+            elif key == "extra":
+                matches = seasonmod.fix_extra(matches, job, odd, p)
+                text = f"Title {odd} is saved as an extra, “{seasonmod.extra_name(job, odd, p)}”, in Featurettes."
+            else:
+                matches = seasonmod.fix_skip(matches, odd)
+                text = f"Title {odd} is skipped, so it isn't copied."
+
+        def undo(before=before, key=p.key):
+            self.set_matches(job, before)
+            self.fix_done = None
+            self.fix_sel = key
+            self.fill_table()
+
+        self.fix_done = (text, undo)
+        self.set_matches(job, matches)
+        self.fill_table()
+
+    def apply_nas(self, p, key: str):
+        """Rename on the NAS through the controller, on a worker thread; Undo puts it back the same way."""
+        job, ctl = self.job, self.win.ctl
+        plan = nasfix.plan(p, key, naming.Scheme.from_config(self.win.cfg))
+        rescan = self.compare.rescan.isChecked() and bool(self.compare.rescan.text())
+
+        def ok(done):
+            def undo(done=done, key=p.key):
+                def undone(text):
+                    self.fix_done = (text, None)
+                    self.after_nas(select=key)
+
+                self.win.run_task("fix", lambda _p: ctl.undo_nas_fix(job, done, rescan), ok=undone,
+                                  title="Couldn't put the names back",
+                                  next_step="Check that the NAS share is mounted, then try again.",
+                                  done=self.render_fix)
+                self.render_fix()
+
+            self.fix_done = (done.text, undo)
+            self.after_nas()
+
+        self.win.run_task("fix", lambda _p: ctl.apply_nas_fix(job, plan, rescan), ok=ok,
+                          title="Couldn't rename the files",
+                          next_step="Check that the NAS share is mounted, then try again.", done=self.render_fix)
+        self.render_fix()
+
+    def after_nas(self, select: str = ""):
+        """The other discs changed on disk: look at the season again, then show what's left (or,
+        after Undo, the problem that's back)."""
+        job = self.job
+        get = getattr(self.win.ctl, "season_status", None)
+        if job is None or get is None:
+            return
+
+        def ok(_st):
+            if self.job is job:
+                if select:
+                    self.fix_sel = select
+                self.fill_table()
+
+        self.win.run_task("season", lambda _p: get(job, refresh=True), ok=ok, quiet=True)
+
+    def undo_fix(self):
+        if self.fix_done and self.fix_done[1] is not None:
+            self.fix_done[1]()
 
     SOURCE_WORDS = {"discdb": "TheDiscDB's record of this disc", "card": "Its title card",
                     "list": "The episode list from the case", "runtime": "Its running time, a guess",
@@ -3310,8 +3800,8 @@ class MatchPage(QWidget):
 
     def card_time(self, ti: int, st=None) -> float | None:
         """Seconds into the title where its card names the episode, when it was read."""
-        if ti in self.compare_reads:
-            return self.compare_reads[ti][1]
+        if ti in self.fix_reads:
+            return self.fix_reads[ti][1]
         st = st if st is not None else self.card_status().get(ti)
         return getattr(st, "t", None) if st is not None and st.state == "read" else None
 
@@ -3374,123 +3864,6 @@ class MatchPage(QWidget):
         self.season_note.setStyleSheet(f"color: {FAIL_TEXT};" if error else "")
         self.season_note.setVisible(bool(text))
 
-    def compare_titles(self, p) -> list[CompareTitle]:
-        job = self.job
-        cards = self.card_status()
-        reads = self.compare_reads
-        prog = {x.title_index: x for x in self.win.progress_of(job)}
-        with self.win.lock():
-            by = {m.title_index: m for m in job.matches}
-            files = {f.title_index: f for f in job.files}
-        lengths = {ti: (self.title_of(ti).duration_s if self.title_of(ti) else 0) for ti in p.titles}
-        lengths.update({f"o{i}": o.length_s for i, o in enumerate(p.others) if o.length_s})
-        keepable = all(t not in self._locked for t in p.titles)
-        out = []
-        for ti in p.titles:
-            t, m, st, f = self.title_of(ti), by.get(ti), cards.get(ti), files.get(ti)
-            secs = t.duration_s if t else 0
-            size = (f.size_bytes if f and f.size_bytes else (t.size_bytes if t else 0))
-            sub = " · ".join(x for x in (t.source if t else "", fmt_len(secs) if secs else "",
-                                         fmt_size(size) if size else "") if x)
-            rows = [("Matched by", self.SOURCE_WORDS.get(m.source if m else "", "Its running time"), "")]
-            if ti in reads:
-                rows.append(("Title card", f"“{reads[ti][0]}” at {fmt_len(int(reads[ti][1]))}", "#8FE0B0"))
-            elif st is None or st.state in ("waiting", "stopped"):
-                rows.append(("Title card", "Not read yet", MUTED))
-            elif st.state == "reading":
-                rows.append(("Title card", "Reading…", "#A9D1F6"))
-            elif st.state == "read" and st.text:
-                rows.append(("Title card", f"“{st.text}”", "#8FE0B0" if st.sure else "#F5C27A"))
-            else:
-                rows.append(("Title card", "No episode name was found on screen", "#F5C27A"))
-            others = [v for k, v in lengths.items() if k != ti and v]
-            if secs and others:
-                d = max(others) - secs
-                if d > seasonmod.SHORT_CUT_S:
-                    rows.append(("Length", f"{fmt_len(secs)}, {d} s shorter than the other", "#F5C27A"))
-                elif d < -seasonmod.SHORT_CUT_S:
-                    rows.append(("Length", f"{fmt_len(secs)}, {-d} s longer than the other", ""))
-                else:
-                    rows.append(("Length", f"{fmt_len(secs)}, about the same as the other", ""))
-            langs = seasonmod.audio_langs(t)
-            dub = seasonmod.dub_language(job, ti, p)
-            if langs:
-                rows.append(("Audio", " and ".join(seasonmod.lang_name(c, t) for c in langs) +
-                             (", none in the disc's main language" if dub else ""), "#F5C27A" if dub else ""))
-            locked = ti in self._locked
-            tp = prog.get(ti)
-            if locked:
-                now = f"On the NAS as {os.path.basename(f.dest_rel)}" if f and f.dest_rel else "On the NAS"
-            elif f is not None:
-                now = "Ripped. It waits until this is settled." if m and m.held else "Ripped, not copied yet"
-            else:
-                now = "Not ripped yet" if not (tp and tp.state == "ripping") else "Ripping now"
-            rows.append(("Now", now, ""))
-            path = self.playable(ti)
-            card_t = self.card_time(ti, st)
-            named = ti in reads or bool(st is not None and st.state == "read" and st.text)
-            out.append(CompareTitle(
-                key=f"here:{ti}", title_index=ti, label=f"Title {ti}", sub=sub, rows=rows, path=path,
-                card_t=card_t, card_named=named, fixes=not locked,
-                suggest_keep=named and not seasonmod.is_short_cut(job, ti, p) and not dub,
-                version_text=f"Keep as the {dub} version" if dub else "Keep as a second version",
-                keep_text=f"This is {p.name or p.code}" if keepable and len(p.titles) > 1 else "",
-                note="Already on the NAS, so its match is locked." if locked else "",
-                watch_tip=self.watch_tip(path, card_t)))
-        for i, o in enumerate(p.others):
-            sub = " · ".join(x for x in (o.source, fmt_len(o.length_s) if o.length_s else "") if x) or o.name
-            rows = [("Now", "On the NAS" if o.on_nas else "Ripped, not copied yet", "")]
-            note = ("Change it on that disc's Match page." if o.where == "disc" else
-                    "A file already in the season folder, which Disc Shelf didn't copy.")
-            out.append(CompareTitle(key=f"other:{i}", title_index=None, label=o.label(), sub=sub, rows=rows,
-                                    path=o.path, note=note, watch_tip=self.watch_tip(o.path, None)))
-        return out
-
-    def fill_compare(self):
-        p = self.problem()
-        if p is None:
-            self.compare.hide()
-            return
-        job = self.job
-        cards = self.card_status()
-        if not self.compare_reads:
-            get = getattr(self.win.ctl, "card_reads", None)
-            if get is not None:
-                try:
-                    self.compare_reads = get(job, list(p.titles))
-                except Exception:  # noqa: BLE001 -- the panel shows the card status instead
-                    self.compare_reads = {}
-        hint_cards = dict(cards)
-        for ti, (text, _t) in self.compare_reads.items():
-            hint_cards[ti] = SimpleNamespace(state="read", text=text, sure=False)
-        hint = seasonmod.compare_hint(job, p, hint_cards)
-        with self.win.lock():
-            local = {f.title_index for f in job.files if f.path and not f.local_deleted}
-        unread = [ti for ti in p.titles if ti in local and ti not in self.compare_reads
-                  and (cards.get(ti) is None or cards[ti].state not in ("read", "none", "reading"))]
-        can_read = hasattr(self.win.ctl, "read_cards") and job.id in self.show_ids and bool(unread)
-        n_here = len(p.titles)
-        read_text = ("Read both title cards" if n_here == 2 else "Read their title cards" if n_here > 2
-                     else "Read its title card") if can_read else ""
-        self.compare.set_compare(f"Which title is {p.episode_text()}?", hint, self.compare_titles(p),
-                                 read_text, reading=self.win.busy("cards"))
-
-    def watch_compared(self, key: str):
-        p = self.problem()
-        if p is None:
-            return
-        kind, _, rest = key.partition(":")
-        if kind == "here":
-            self.watch(int(rest))
-        else:
-            o = p.others[int(rest)]
-            self.watch(0, o.path, None, o.label()[:1].lower() + o.label()[1:])
-
-    def read_compared_cards(self):
-        p = self.problem()
-        if p is not None:
-            self.read_cards(only=set(p.titles))
-
     def open_picker(self, ti: int):
         for r in range(self.table.rowCount()):
             cell = self.table.cellWidget(r, 2)
@@ -3502,48 +3875,6 @@ class MatchPage(QWidget):
                 if combo.isEnabled():
                     combo.open_popup()
                 return
-
-    def fix(self, kind: str, ti: int):
-        """One of the compare panel's fixes for the problem being compared."""
-        p, job = self.problem(), self.job
-        if p is None or job is None or ti in self._locked:
-            return
-        with self.win.lock():
-            matches = list(job.matches)
-        if kind == "keep":
-            new = seasonmod.fix_keep(matches, ti, p, self._locked)
-            text = (f"Title {ti} is {p.episode_text()}. "
-                    f"{seasonmod._titles_text([t for t in p.titles if t != ti])} is skipped until you pick its episode.")
-        elif kind == "version":
-            new = seasonmod.fix_version(matches, job, ti, p)
-            v = next((m.version for m in new if m.title_index == ti), "")
-            text = f"Title {ti} is kept as a second version of {p.episode_text()}, “{v}”."
-        elif kind == "skip":
-            new = seasonmod.fix_skip(matches, ti)
-            text = f"Title {ti} is skipped, so it isn't copied."
-        else:
-            new = seasonmod.fix_extra(matches, job, ti, p)
-            text = f"Title {ti} is saved as an extra, “{seasonmod.extra_name(job, ti, p)}”, in Featurettes."
-        self.set_matches(job, new)
-        self.compare_reads = {}
-        self.fill_table()
-        self.set_season_note(text)
-        if kind == "keep":
-            rest = [t for t in p.titles if t != ti and t not in self._locked]
-            if rest:
-                self.open_picker(rest[0])
-
-    def grid_clicked(self, number: int):
-        st = self.season_st
-        if st is None:
-            return
-        p = next((p for p in st.problems if p.season == st.season and number in p.numbers), None)
-        if p is not None:
-            self.open_compare(p.key)
-        else:
-            cell = next((c for c in st.cells if c.number == number), None)
-            if cell is not None:
-                self.set_season_note(cell.tip + " That's on another disc, so change it from that disc's Match page.")
 
     def save_later(self):
         try:
@@ -4222,7 +4553,7 @@ class NeedsCard(QFrame):
         hl = hbox(texts, None, spacing=16, margins=(18, 14, 18, 14))
         hl.setStretch(0, 1)
         if item.checks or job.stage == "match":
-            hl.addWidget(link("Open matches", lambda: win.open_match(job)))
+            hl.addWidget(link("Open matches", lambda: self.open_fix(None)))
         if any(e.state == "failed" for e in getattr(item, "encodes", [])) and hasattr(win.ctl, "retry_encode"):
             self.retry_av1 = button("Encode AV1 again", small=True)
             self.retry_av1.clicked.connect(lambda: (win.ctl.retry_encode(job), win.refresh_jobs()))
@@ -4253,8 +4584,8 @@ class NeedsCard(QFrame):
             # Two titles hold one episode: confirming one here wouldn't settle it, comparing them does.
             why = label(row.held, wrap=True)
             why.setStyleSheet("color: #FFB4AE; font-size: 13px;")
-            go = button("Compare on the Match page", small=True)
-            go.clicked.connect(lambda: self.page.win.open_match(self.item.job))
+            go = button("Fix on the Match page", small=True)
+            go.clicked.connect(lambda _c=False, ti=row.title_index: self.open_fix(ti))
             rl = hbox(ti, why, None, go, spacing=12, margins=(18, 10, 18, 10))
             rl.setStretch(1, 1)
             w.setLayout(rl)
@@ -4286,6 +4617,18 @@ class NeedsCard(QFrame):
         w.setLayout(rl)
         self.rows[row.title_index] = (group, opts)
         return w
+
+    def open_fix(self, ti: int | None):
+        """Open the Match page with the fix panel on this title's problem, or on the first problem."""
+        win = self.page.win
+        win.open_match(self.item.job)
+        m = win.match
+        if m.job is not self.item.job:
+            return
+        if ti is not None:
+            m.open_fix_for_title(ti)
+        elif m.problems_list():
+            m.next_problem()
 
     def chosen(self, ti: int):
         group, opts = self.rows[ti]
