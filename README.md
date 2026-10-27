@@ -29,6 +29,9 @@ format kept, unless you ask for a smaller AV1 copy as well.
 - **Copies while it rips.** Each title goes to your NAS or library folder as soon as it's
   ripped and matched, is read back to check it arrived intact, and Plex is asked to scan
   just that folder. A film is copied while it's still being ripped.
+- **Tidies the library you already have.** The Library page checks a show's files against
+  TVmaze, finds duplicates and misnamed or misplaced episodes, lists every rename before
+  anything changes, and can undo it.
 - **Keeps HDR as it is.** HDR10, HDR10+ and Dolby Vision are kept untouched by default.
   The badge on the Rip page says **RAW - No Conversion**, or lists what a setting would
   change.

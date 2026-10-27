@@ -4544,6 +4544,774 @@ class HistoryPage(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# Library page
+# ---------------------------------------------------------------------------
+
+from dataclasses import replace as _dc_replace  # noqa: E402
+from PySide6.QtWidgets import QListWidget, QListWidgetItem  # noqa: E402
+
+
+class LibraryPage(QWidget):
+    """Check the files already in a TV library and rename them to a naming scheme (library.py).
+    Nothing on disk changes until Rename, and each rename writes an undo log."""
+    checked = Signal(object)          # (folder, scan, lookup, readings), sent from the worker thread
+
+    CELLS = {   # state: (background, border, text, border style, legend)
+        "ok": ("#1F2A22", "#2F5A42", "#8FE0B0", "solid", "Title card matches"),
+        "unread": ("transparent", "#7D858C", "#A2A9B0", "dashed", "Card not read"),
+        "dup": ("#3A1D1D", "#E5534B", "#FFB4AE", "solid", "Two files"),
+        "missing": ("#1A1D20", "#3A4046", "#7D858C", "dotted", "No file"),
+        "unknown": ("#2B2416", "#6B5527", "#F5C27A", "solid", "Not on TVmaze"),
+    }
+    EPISODE_SCHEMES = (("code", "Season and episode"), ("name", "With the episode name"),
+                       ("name_quality", "With the episode name and quality"))
+    MAX_ROWS = 300                    # rows shown in the changes table; the rest are counted
+
+    def __init__(self, win: "MainWindow"):
+        super().__init__()
+        self.win = win
+        self.dest: configmod.Destination | None = None
+        self.root = ""
+        self.shows: list[str] = []
+        self.scans: dict = {}
+        self.looks: dict = {}
+        self.plans: dict = {}
+        self.readings: dict = {}
+        self.fixes: dict[str, str] = {}          # a duplicate's path → "version" | "extra" | "aside"
+        self.picked: dict[str, int] = {}         # show folder → TVmaze show id chosen by hand
+        self.current: str | None = None
+        self.episode_scheme: str | None = None   # None: the one in Settings
+        self.scope = "show"
+        self.checking_all = False
+        self.result = ""                         # what the last rename or undo did, one or two sentences
+        self.checking: str | None = None         # the show being checked now
+        self.checked.connect(self.got_check)
+
+        body = hbox(spacing=0)
+        side = QFrame()
+        side.setObjectName("nav")
+        side.setFixedWidth(290)
+        sl = vbox(spacing=10, margins=(16, 24, 16, 16))
+        side.setLayout(sl)
+        self.dest_combo = NoWheelComboBox()
+        self.dest_combo.setAccessibleName("Library to check")
+        self.dest_combo.currentIndexChanged.connect(self.dest_changed)
+        sl.addWidget(field("Library", self.dest_combo))
+        sl.addWidget(label("Films aren't checked yet. Only TV destinations are listed here.", "field", wrap=True))
+        self.summary = label("", "small", wrap=True)
+        sl.addWidget(self.summary)
+        self.show_list = QListWidget()
+        self.show_list.setAccessibleName("Shows")
+        self.show_list.setStyleSheet(f"QListWidget {{ background: transparent; border: none; }} "
+                                     f"QListWidget::item {{ border-radius: 8px; }} "
+                                     f"QListWidget::item:selected {{ background: {RAISED}; }}")
+        self.show_list.currentRowChanged.connect(self.row_changed)
+        sl.addWidget(self.show_list, 1)
+        self.all_btn = button("Check every show")
+        self.all_btn.clicked.connect(self.check_all)
+        sl.addWidget(self.all_btn)
+        self.all_note = label("", "field", wrap=True)
+        sl.addWidget(self.all_note)
+        body.addWidget(side)
+
+        inner = QWidget()
+        col = vbox(spacing=18, margins=(24, 24, 24, 24))
+        inner.setLayout(col)
+        self.title = label("Library", "h1")
+        self.path = label("", "small")
+        self.path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.path.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.tvmaze = NoWheelComboBox()
+        self.tvmaze.setAccessibleName("The show on TVmaze")
+        self.tvmaze.setMinimumWidth(260)
+        self.tvmaze.activated.connect(self.tvmaze_picked)
+        self.recheck = button("Check again", small=True)
+        self.recheck.clicked.connect(lambda: self.current and self.check_show(self.current))
+        head = hbox(vbox(self.title, self.path, spacing=4),
+                    vbox(label("Show on TVmaze", "field"), hbox(self.tvmaze, self.recheck, spacing=8), spacing=6),
+                    spacing=16)
+        head.setStretch(0, 1)
+        col.addLayout(head)
+        col.addWidget(label("Checks the files already on the NAS and renames them to the scheme you pick. Nothing "
+                            "changes until you choose Rename, and every rename can be undone.", "muted", wrap=True))
+        self.empty = label("", "muted", wrap=True)
+        col.addWidget(self.empty)
+
+        self.body = QWidget()
+        bl = vbox(spacing=18)
+        self.body.setLayout(bl)
+        col.addWidget(self.body)
+
+        tiles = QGridLayout()
+        tiles.setSpacing(12)
+        self.tiles = []
+        for i, cap in enumerate(("Files", "Named the Plex way", "Problems", "Shows not checked yet")):
+            t = QFrame()
+            t.setObjectName("note")
+            big = label("")
+            big.setStyleSheet("font-size: 22px; font-weight: 600;")
+            note = label("", "field", wrap=True)
+            t.setLayout(vbox(label(cap, "small"), big, note, spacing=4, margins=(14, 12, 14, 12)))
+            tiles.addWidget(t, 0, i)
+            tiles.setColumnStretch(i, 1)
+            self.tiles.append((big, note))
+        bl.addLayout(tiles)
+
+        grid_card = Card(spacing=10)
+        self.grid_head = label("Episodes", "h2")
+        grid_card.lay.addWidget(self.grid_head)
+        grid_card.lay.addWidget(label("Each square is one episode on TVmaze. Pick one to see its files.", "small"))
+        self.grid_lay = vbox(spacing=10)
+        grid_card.lay.addLayout(self.grid_lay)
+        sq = lambda c: f'<span style="color:{c}">■</span>'  # noqa: E731
+        legend = label(" &nbsp;&nbsp; ".join(f"{sq(v[2])} {v[4]}" for v in self.CELLS.values()), "small")
+        legend.setTextFormat(Qt.TextFormat.RichText)
+        grid_card.lay.addWidget(legend)
+        self.cell_note = label("", "small", wrap=True)
+        self.cell_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        grid_card.lay.addWidget(self.cell_note)
+        bl.addWidget(grid_card)
+
+        self.prob_card = Card(spacing=12)
+        self.prob_card.lay.addWidget(label("Needs a look", "h2"))
+        self.prob_lay = vbox(spacing=12)
+        self.prob_card.lay.addLayout(self.prob_lay)
+        bl.addWidget(self.prob_card)
+
+        sc = Card(spacing=12)
+        sc.lay.addWidget(label("Naming scheme", "h2"))
+        sc.lay.addWidget(label("All of these are names Plex reads. The default comes from Settings → File names; "
+                               "pick another here to use it for this rename only.", "small", wrap=True))
+        self.scheme_group = QButtonGroup(self)
+        self.scheme_opts: dict[str, Option] = {}
+        for key, text in self.EPISODE_SCHEMES:
+            rb = QRadioButton()
+            rb.setProperty("key", key)
+            self.scheme_group.addButton(rb)
+            opt = Option(rb, text, "")
+            opt.desc.setProperty("mono", "true")
+            self.scheme_opts[key] = opt
+            sc.lay.addWidget(opt)
+        self.scheme_group.buttonClicked.connect(self.scheme_picked)
+        sc.lay.addWidget(label("Use it for", "field"))
+        self.scope_group = QButtonGroup(self)
+        self.scope_show, self.scope_all = QRadioButton(), QRadioButton()
+        for rb, key in ((self.scope_show, "show"), (self.scope_all, "all")):
+            rb.setProperty("key", key)
+            rb.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.scope_group.addButton(rb)
+        self.scope_show.setChecked(True)
+        self.scope_group.buttonClicked.connect(self.scope_picked)
+        sc.lay.addLayout(hbox(self.scope_show, self.scope_all, None, spacing=20))
+        self.scope_note = label("", "small", wrap=True)
+        sc.lay.addWidget(self.scope_note)
+        bl.addWidget(sc)
+
+        ch = Card(margins=(0, 0, 0, 0), spacing=0)
+        chead = QFrame()
+        chead.setObjectName("cardHead")
+        self.change_count = label("", "small")
+        chead.setLayout(hbox(label("What changes", "h2"), self.change_count, None, spacing=12,
+                             margins=(20, 14, 20, 14)))
+        ch.lay.addWidget(chead)
+        self.table = plain_table(["Now", "Becomes", "Why"])
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(2, 240)
+        self.table.setWordWrap(True)
+        ch.lay.addWidget(self.table)
+        self.more = label("", "small")
+        self.more.setContentsMargins(20, 10, 20, 10)
+        ch.lay.addWidget(self.more)
+        foot = QFrame()
+        foot.setObjectName("rowLine")
+        fl = vbox(spacing=12, margins=(20, 14, 20, 14))
+        foot.setLayout(fl)
+        self.rescan = QCheckBox()
+        self.rescan.setChecked(True)
+        self.rescan_opt = Option(self.rescan, "Ask Plex to rescan the show",
+                                 "Watched status stays with each episode, not the file name.")
+        fl.addWidget(self.rescan_opt)
+        self.apply_note = label("", "small", wrap=True)
+        self.undo_btn = button("Undo last rename")
+        self.undo_btn.clicked.connect(self.undo)
+        self.rename_btn = button("Rename", primary=True)
+        self.rename_btn.clicked.connect(self.rename)
+        al = hbox(self.apply_note, None, self.undo_btn, self.rename_btn, spacing=12)
+        al.setStretch(0, 1)
+        fl.addLayout(al)
+        ch.lay.addWidget(foot)
+        bl.addWidget(ch)
+        col.addStretch(1)
+        body.addWidget(scroll_page(inner), 1)
+        self.setLayout(body)
+        self.body.hide()
+
+    # -- where things are ---------------------------------------------------
+    def library_root(self, d: configmod.Destination) -> str:
+        fn = getattr(self.win.ctl, "library_path", None)
+        return fn(d) if fn else d.path
+
+    def undo_dir(self) -> str:
+        fn = getattr(self.win.ctl, "library_undo_dir", None)
+        return fn() if fn else os.path.join(configmod.state_dir(), "library-undo")
+
+    def jobs(self) -> list[Job]:
+        fn = getattr(self.win.ctl, "library_jobs", None) or getattr(self.win.ctl, "jobs", None)
+        return list(fn()) if fn else []
+
+    def scheme(self):
+        from . import naming
+        base = naming.Scheme.from_config(self.win.cfg)
+        return _dc_replace(base, episode=self.episode_scheme) if self.episode_scheme else base
+
+    # -- opening ------------------------------------------------------------
+    def showEvent(self, e):  # noqa: N802 -- Qt's name
+        super().showEvent(e)
+        self.open()
+
+    def open(self):
+        dests = [d for d in self.win.cfg.destinations if d.layout == "tv"]
+        keep = self.dest.path if self.dest else None
+        self.dest_combo.blockSignals(True)
+        self.dest_combo.clear()
+        for d in dests:
+            self.dest_combo.addItem(f"{d.label} · {d.path}", d)
+        i = next((k for k, d in enumerate(dests) if d.path == keep), 0)
+        self.dest_combo.setCurrentIndex(i)
+        self.dest_combo.blockSignals(False)
+        if not dests:
+            self.dest = None
+            self.show_empty("There's no TV destination yet. Add one in Settings, then open Library again.")
+            return
+        if self.dest is None or self.dest.path != dests[i].path or not self.shows:
+            self.dest_changed(i)
+        else:
+            self.render()
+
+    def show_empty(self, text: str):
+        self.body.hide()
+        self.empty.setText(text)
+        self.empty.show()
+        self.title.setText("Library")
+        self.path.setText("")
+        self.tvmaze.clear()
+        self.tvmaze.setEnabled(False)
+        self.recheck.setEnabled(False)
+
+    def dest_changed(self, _i):
+        d = self.dest_combo.currentData()
+        if d is None:
+            return
+        if self.dest is None or d.path != self.dest.path:
+            self.scans, self.looks, self.plans, self.fixes, self.picked = {}, {}, {}, {}, {}
+            self.current = None
+        self.dest = d
+        self.root = self.library_root(d)
+        self.load_shows()
+
+    def load_shows(self, select: str | None = None):
+        from . import library
+        root = self.root
+        if not root or not os.path.isdir(root):
+            self.shows = []
+            self.fill_list()
+            self.show_empty(f"The folder {root or '(none)'} isn't there. Check that the NAS share is mounted, "
+                            "then open Library again.")
+            return
+
+        def got(names):
+            self.shows = list(names)
+            for cache in (self.scans, self.looks, self.plans):
+                for k in [k for k in cache if k not in self.shows]:
+                    del cache[k]
+            if select in self.shows:
+                self.current = select
+            elif self.current not in self.shows:
+                self.current = self.shows[0] if self.shows else None
+            self.fill_list()
+            if self.current is None:
+                self.show_empty("This library has no show folders yet.")
+            elif self.current in self.plans:
+                self.render()
+            else:
+                self.check_show(self.current)
+
+        self.win.run_task("library-list", lambda _p: library.list_shows(root), ok=got,
+                          title="Couldn't read the library",
+                          next_step="Check that the NAS share is mounted, then open Library again.")
+
+    # -- checking -----------------------------------------------------------
+    def _check(self, folder: str, show_id: int | None, search, episodes) -> tuple:
+        """Scan one show folder and look it up on TVmaze. Runs on a worker thread."""
+        from . import library
+        scan = library.scan_show(self.root, folder)
+        try:
+            look = library.lookup(search, episodes, folder, show_id)
+        except Exception as exc:  # noqa: BLE001 -- shown on the page, the rest of the check still counts
+            name, year, _r = library.show_query(folder)
+            look = library.Lookup(name, year, note=f"Couldn't look the show up on TVmaze ({exc}). Check the "
+                                                   "internet connection, then choose Check again.")
+        return folder, scan, look, library.readings_from_jobs(self.jobs())
+
+    def check_show(self, folder: str):
+        if self.win.busy("library-check"):
+            return
+        ctl, show_id = self.win.ctl, self.picked.get(folder)
+        self.current = self.checking = folder
+        self.title.setText(folder)
+        self.empty.setText(f"Checking {folder}…")
+        self.empty.show()
+        self.win.run_task("library-check", lambda _p: self._check(folder, show_id, ctl.search_show, ctl.episodes),
+                          ok=self.got_check, title="Couldn't check the show",
+                          next_step="Check that the NAS share is mounted, then choose Check again.",
+                          done=self.after_check)
+        self.update_buttons()
+
+    def after_check(self):
+        # The selection may have moved on while another show was being checked.
+        if self.current and self.current != self.checking and self.current in self.shows \
+                and self.current not in self.plans:
+            QTimer.singleShot(0, lambda: self.current and self.check_show(self.current))
+        self.update_buttons()
+
+    def check_all(self):
+        from . import library
+        if self.checking_all:
+            self.checking_all = False        # the worker stops after the show it's on
+            return
+        todo = [s for s in self.shows if s not in self.plans]
+        if not todo or self.win.busy("library-all"):
+            return
+        ctl = self.win.ctl
+        throttle = library.Throttle()
+        search, episodes = throttle(ctl.search_show), throttle(ctl.episodes)
+
+        def run(progress):
+            for k, folder in enumerate(todo):
+                if not self.checking_all:
+                    break
+                progress(k / len(todo), f"Checking {k + 1} of {len(todo)}: {folder}")
+                self.checked.emit(self._check(folder, self.picked.get(folder), search, episodes))
+            return len(todo)
+
+        def finished():
+            self.checking_all = False
+            self.all_note.setText("")
+            self.update_buttons()
+
+        self.checking_all = True
+        self.win.run_task("library-all", run, progress=lambda _f, t: self.all_note.setText(t),
+                          title="Couldn't check every show",
+                          next_step="Check that the NAS share is mounted, then choose Check every show again.",
+                          done=finished)
+        self.update_buttons()
+
+    def got_check(self, result):
+        folder, scan, look, readings = result
+        if folder not in self.shows:
+            return
+        self.scans[folder], self.looks[folder] = scan, look
+        self.readings.update(readings)
+        self.replan(folder)
+        self.fill_list()
+        if folder == self.current:
+            self.render()
+        else:
+            self.update_tiles()
+
+    def replan(self, folder: str):
+        from . import library
+        self.plans[folder] = library.plan_show(self.scans[folder], self.looks[folder], self.scheme(), self.fixes,
+                                               self.readings, records_root=self.dest.path if self.dest else "",
+                                               root=self.root)
+
+    def tvmaze_picked(self, i: int):
+        sid = self.tvmaze.itemData(i)
+        if self.current and sid is not None:
+            self.picked[self.current] = sid
+            self.check_show(self.current)
+
+    # -- the list on the left -----------------------------------------------
+    def fill_list(self):
+        from . import library
+        self.show_list.blockSignals(True)
+        self.show_list.clear()
+        for name in self.shows:
+            plan = self.plans.get(name)
+            if plan is None:
+                note, colour = "Not checked yet", MUTED
+            else:
+                n, r = library.problem_count(plan), len(plan.renames)
+                bits = [plural(n, "problem")] if n else []
+                bits += [f"{r} to rename"] if r else []
+                note = " · ".join(bits) or "Names are fine"
+                colour = "#FFB4AE" if n else (SOFT if r else DONE_TEXT)
+            it = QListWidgetItem()
+            w = QWidget()
+            nl = label(name)
+            nl.setStyleSheet(f"color: {TEXT}; font-weight: 600;" if name == self.current else f"color: {TEXT};")
+            sub = label(note, "field")
+            sub.setStyleSheet(f"color: {colour};")
+            w.setLayout(vbox(nl, sub, spacing=2, margins=(12, 8, 12, 8)))
+            w.setAccessibleName(f"{name}: {note}")
+            it.setSizeHint(w.sizeHint())
+            self.show_list.addItem(it)
+            self.show_list.setItemWidget(it, w)
+        if self.current in self.shows:
+            self.show_list.setCurrentRow(self.shows.index(self.current))
+        self.show_list.blockSignals(False)
+        checked = sum(1 for s in self.shows if s in self.plans)
+        named = sum(p.named for p in self.plans.values())
+        files = sum(p.files for p in self.plans.values())
+        self.summary.setText(f"{plural(len(self.shows), 'show')} in this library, {checked} checked. "
+                             f"{named} of {plural(files, 'checked file')} have Plex-style names.")
+
+    def row_changed(self, row: int):
+        if 0 <= row < len(self.shows) and self.shows[row] != self.current:
+            self.result = ""
+            self.current = self.shows[row]
+            if self.current in self.plans:
+                self.fill_list()
+                self.render()
+            else:
+                self.check_show(self.current)
+
+    # -- the page for one show ----------------------------------------------
+    def render(self):
+        plan = self.plans.get(self.current) if self.current else None
+        if plan is None:
+            return
+        self.empty.hide()
+        self.body.show()
+        look = plan.lookup
+        self.title.setText(self.current)
+        self.path.setText(f"{self.dest.label} · {os.path.join(self.dest.path, self.current)}")
+        self.path.setToolTip(self.path.text())
+        self.tvmaze.blockSignals(True)
+        self.tvmaze.clear()
+        for h in (look.hits if look else [])[:12]:
+            self.tvmaze.addItem(f"{h.name} ({h.year})" if h.year else h.name, h.id)
+        if look and look.show_id is not None:
+            self.tvmaze.setCurrentIndex(max(0, self.tvmaze.findData(look.show_id)))
+        self.tvmaze.setEnabled(self.tvmaze.count() > 1)
+        self.tvmaze.blockSignals(False)
+        self.update_tiles()
+        self.fill_grid(plan)
+        self.fill_problems(plan)
+        self.fill_scheme(plan)
+        self.fill_changes()
+        self.update_buttons()
+
+    def update_tiles(self):
+        from . import library
+        plan = self.plans.get(self.current) if self.current else None
+        if plan is None:
+            return
+        (fb, fn), (nb, nn), (pb, pn), (ub, un) = self.tiles
+        fb.setText(str(plan.files))
+        fn.setText(f"and {plural(plan.extras, 'extra')}, left as they are" if plan.extras else "video files")
+        nb.setText(f"{plan.named}/{plan.files}")
+        nn.setText("All of them." if plan.named == plan.files and plan.files else
+                   f"{plural(len(plan.renames), 'file')} would be renamed.")
+        n = library.problem_count(plan)
+        pb.setText(str(n))
+        pb.setStyleSheet(f"font-size: 22px; font-weight: 600; color: {'#FFB4AE' if n else DONE_TEXT};")
+        pn.setText("Listed below." if n else "Nothing needs a decision.")
+        left = sum(1 for s in self.shows if s not in self.plans)
+        ub.setText(str(left))
+        un.setText(f"of {plural(len(self.shows), 'show')}. Choose Check every show to check them."
+                   if left else "Every show is checked.")
+
+    def fill_grid(self, plan):
+        clear_layout(self.grid_lay)
+        self.cell_note.setText("")
+        seasons: dict[int, list] = {}
+        for c in plan.cells:
+            seasons.setdefault(c.season, []).append(c)
+        if not seasons:
+            self.grid_lay.addWidget(label("No file here has an episode TVmaze knows, so there's nothing to show.",
+                                          "small", wrap=True))
+            return
+        per_row = 13
+        for season, cells in sorted(seasons.items()):
+            self.grid_lay.addWidget(label(f"Season {season}", "h3"))
+            g = QGridLayout()
+            g.setSpacing(6)
+            for k, c in enumerate(sorted(cells, key=lambda c: c.number)):
+                bg, border, fg, style, _what = self.CELLS.get(c.state, self.CELLS["unread"])
+                b = QPushButton(f"{c.number:02d}")
+                b.setCursor(Qt.CursorShape.PointingHandCursor)
+                b.setMinimumHeight(34)
+                b.setStyleSheet(f"QPushButton {{ background: {bg}; border: 1px {style} {border}; border-radius: 6px; "
+                                f"color: {fg}; font-size: 12px; padding: 0; min-height: 34px; }} "
+                                f"QPushButton:focus {{ border: 2px solid {ACCENT}; }}")
+                b.setToolTip(c.tip)
+                b.setAccessibleName(c.tip)
+                b.clicked.connect(lambda _c=False, c=c: self.cell_note.setText(
+                    c.tip + ("\n" + "\n".join(c.files) if c.files else "")))
+                g.addWidget(b, k // per_row, k % per_row)
+            for col in range(per_row):
+                g.setColumnStretch(col, 1)
+            self.grid_lay.addLayout(g)
+
+    def fill_problems(self, plan):
+        from .library import SET_ASIDE
+        clear_layout(self.prob_lay)
+        shown = plan.problems[:30]
+        self.prob_card.setVisible(bool(shown))
+        for p in shown:
+            row = QFrame()
+            row.setObjectName("note")
+            rl = vbox(spacing=8, margins=(14, 12, 14, 12))
+            row.setLayout(rl)
+            text = label(p.text, wrap=True)
+            text.setStyleSheet("color: #FFB4AE;" if p.kind in ("duplicate", "clash") else f"color: {SOFT};")
+            rl.addWidget(text)
+            if p.fixable and len(p.files) > 1:
+                rel = p.files[1]
+                group = QButtonGroup(row)
+                cur = self.fixes.get(rel, "version")
+                folder = plan.target_folder
+                for key, title, desc in (
+                        ("version", f"Keep it as a second version of {p.title}",
+                         f"Plex shows one {p.title} and offers both under Play Version."),
+                        ("extra", "Save it as an extra",
+                         f"It moves to {folder}/Featurettes and {p.title} keeps one file."),
+                        ("aside", "Set it aside",
+                         f"It moves to a {SET_ASIDE} folder in {folder}, which Plex skips. Nothing is deleted.")):
+                    rb = QRadioButton()
+                    rb.setChecked(key == cur)
+                    group.addButton(rb)
+                    rb.toggled.connect(lambda on, rel=rel, key=key: on and self.fix_picked(rel, key))
+                    rl.addWidget(Option(rb, title, desc))
+            self.prob_lay.addWidget(row)
+        if len(plan.problems) > len(shown):
+            self.prob_lay.addWidget(label(f"{len(plan.problems) - len(shown)} more like these.", "small"))
+
+    def fix_picked(self, rel: str, key: str):
+        self.result = ""
+        self.fixes[rel] = key
+        if self.current:
+            self.replan(self.current)
+            self.fill_list()
+            self.fill_changes()
+            self.update_tiles()
+            self.update_buttons()
+
+    def fill_scheme(self, plan):
+        from . import naming
+        look = plan.lookup
+        base = self.scheme()
+        ep = next((e for e in (look.episodes if look else []) if e.number == 1), None)
+        show, year = (look.name, look.year) if look and look.show_id else ("Bluey", 2018)
+        title = ep.title if ep else "Magic Xylophone"
+        season = ep.season if ep else 1
+        settings = naming.Scheme.from_config(self.win.cfg).episode
+        for key, opt in self.scheme_opts.items():
+            s = _dc_replace(base, episode=key)
+            path = naming.episode_relpath(show, year, season, 1, title=title, quality="1080p", scheme=s)
+            opt.desc.setText(path.rsplit("/", 1)[-1])
+            text = dict(self.EPISODE_SCHEMES)[key]
+            opt.btn.setText(text + (" (default, set in Settings)" if key == settings else ""))
+            opt.btn.setChecked(key == base.episode)
+        n = len(self.shows)
+        self.scope_show.setText(f"{self.current} only")
+        self.scope_all.setText(f"Every show in {self.dest.label} ({n})")
+        if self.scope == "show":
+            self.scope_note.setText(f"Only {self.current} changes. New rips keep the scheme set in Settings.")
+        else:
+            left = sum(1 for s in self.shows if s not in self.plans)
+            wait = sum(1 for p in self.plans.values() if self._waits(p))
+            parts = [f"Each show is checked first. {plural(left, 'show')} still to check." if left else
+                     "Every show is checked."]
+            if wait:
+                parts.append(f"{plural(wait, 'show')} wait for you to pick the show on TVmaze, so they aren't renamed.")
+            parts.append("New rips keep the scheme set in Settings.")
+            self.scope_note.setText(" ".join(parts))
+
+    @staticmethod
+    def _waits(plan) -> bool:
+        return plan.lookup is None or plan.lookup.show_id is None or plan.lookup.ambiguous
+
+    def scheme_picked(self, btn):
+        self.result = ""
+        from . import naming
+        key = btn.property("key")
+        self.episode_scheme = None if key == naming.Scheme.from_config(self.win.cfg).episode else key
+        for folder in list(self.plans):
+            self.replan(folder)
+        self.fill_list()
+        self.render()
+
+    def scope_picked(self, btn):
+        self.result = ""
+        self.scope = btn.property("key")
+        if self.current in self.plans:
+            self.fill_scheme(self.plans[self.current])
+            self.fill_changes()
+            self.update_buttons()
+
+    def in_scope(self) -> list:
+        if self.scope == "show":
+            plan = self.plans.get(self.current) if self.current else None
+            return [plan] if plan else []
+        return [self.plans[s] for s in self.shows if s in self.plans and not self._waits(self.plans[s])]
+
+    def fill_changes(self):
+        plans = self.in_scope()
+        renames = [r for p in plans for r in p.renames]
+        t = self.table
+        t.setRowCount(0)
+        mono = QFont(self.win.mono)
+        mono.setPixelSize(12)
+        # Within one show folder the table shows paths inside it, as the folder is in the heading.
+        top = self.current if self.scope == "show" else None
+        short = top is not None and all(r.src.split("/", 1)[0] == top == r.dst.split("/", 1)[0] for r in renames)
+        cut = (lambda p: p.split("/", 1)[1]) if short else (lambda p: p)  # noqa: E731
+        for r in renames[:self.MAX_ROWS]:
+            row = t.rowCount()
+            t.insertRow(row)
+            t.setItem(row, 0, item(cut(r.src), mono, muted=True))
+            new = item(cut(r.dst), mono)
+            new.setForeground(QColor(DONE_TEXT))
+            t.setItem(row, 1, new)
+            why = r.why + (f" · {plural(len(r.sidecars), 'subtitle or sidecar file')} too" if r.sidecars else "")
+            t.setItem(row, 2, item(why))
+            for c in range(3):
+                t.item(row, c).setToolTip(t.item(row, c).text())
+            t.setRowHeight(row, 40)
+        fit_table(t)
+        t.setVisible(bool(renames))
+        extra = len(renames) - min(len(renames), self.MAX_ROWS)
+        self.more.setText(f"{extra} more not shown." if extra else
+                          ("" if renames else "Every file already has the name this scheme gives it."))
+        self.more.setVisible(bool(self.more.text()))
+        side = sum(len(r.sidecars) for r in renames)
+        self.change_count.setText(plural(len(renames), "file") + (f" and {side} with them" if side else ""))
+
+    def update_buttons(self):
+        from . import library
+        busy = any(self.win.busy(k) for k in ("library-check", "library-rename", "library-undo", "library-list"))
+        renames = [r for p in self.in_scope() for r in p.renames]
+        left = sum(1 for s in self.shows if s not in self.plans)
+        all_first = self.scope == "all" and left > 0
+        if all_first:
+            self.rename_btn.setText("Check every show first")
+            self.rename_btn.setEnabled(not busy and not self.win.busy("library-all"))
+        else:
+            self.rename_btn.setText(f"Rename {plural(len(renames), 'file')}" if renames else "Rename")
+            self.rename_btn.setEnabled(bool(renames) and not busy and not self.win.busy("library-all"))
+        self.all_btn.setEnabled(bool(left) and not self.win.busy("library-all"))
+        self.all_btn.setText("Stop checking" if self.checking_all else "Check every show")
+        if self.checking_all:
+            self.all_btn.setEnabled(True)
+        self.recheck.setEnabled(bool(self.current) and not busy)
+        self.undo_btn.setEnabled(not busy and library.last_log(self.undo_dir()) is not None)
+        can_scan = bool(self.win.settings.signed_in and self.dest and self.dest.library)
+        self.rescan_opt.setEnabled(can_scan)
+        self.rescan.setEnabled(can_scan)
+        self.rescan_opt.desc.setText("Watched status stays with each episode, not the file name." if can_scan else
+                                     "Sign in to Plex and choose a library for this destination in Settings to use "
+                                     "this.")
+        if not self.win.busy("library-rename") and not self.win.busy("library-undo"):
+            ready = (f"Nothing has changed yet. {plural(len(renames), 'file')} "
+                     f"{'is' if len(renames) == 1 else 'are'} ready to rename." if renames else "")
+            self.apply_note.setText(self.result or ready)
+
+    # -- renaming -----------------------------------------------------------
+    def rename(self):
+        from . import library
+        if self.scope == "all" and any(s not in self.plans for s in self.shows):
+            self.check_all()
+            return
+        plans = self.in_scope()
+        renames = [r for p in plans for r in p.renames]
+        if not renames or self.win.busy("library-rename"):
+            return
+        moves = library.moves_of(renames)
+        extra = [x for p in plans for x in p.extra_files]
+        folders = sorted({m.split("/", 1)[0] for pair in moves for m in pair})
+        root, undo_dir, dest = self.root, self.undo_dir(), self.dest
+        rescan = self.rescan.isChecked() and self.rescan.isEnabled()
+        label_text = f"{plural(len(renames), 'file')} in " + (self.current if self.scope == "show" else dest.label)
+        ctl = self.win.ctl
+        targets = sorted({r.dst.split("/", 1)[0] for r in renames})
+
+        def run(progress):
+            library.apply(root, moves, undo_dir, label_text, extra, progress, scan_folders=folders)
+            return len(renames), self._plex_scan(ctl, dest, folders) if rescan else ""
+
+        def ok(result):
+            n, plex = result
+            self.result = (f"Renamed {plural(n, 'file')}. {plex}".strip() +
+                           " Choose Undo last rename to put the old names back.")
+            self.forget(folders)
+            nxt = targets[0] if self.scope == "show" and len(targets) == 1 else self.current
+            self.load_shows(select=nxt)
+
+        self.apply_note.setText(f"Renaming {plural(len(renames), 'file')}…")
+        self.win.run_task("library-rename", run, ok=ok, progress=lambda _f, t: self.apply_note.setText(t),
+                          title="Couldn't rename the files", next_step="", done=self.update_buttons)
+        self.update_buttons()
+
+    @staticmethod
+    def _plex_scan(ctl, dest, folders: list[str]) -> str:
+        """Ask Plex to scan each show folder that still exists. Never raises: the renames are done either way."""
+        fn = getattr(ctl, "plex_scan_folder", None)
+        if fn is None or not dest.library:
+            return ""
+        root_fn = getattr(ctl, "library_path", None)
+        root = root_fn(dest) if root_fn else dest.path
+        asked = []
+        for f in folders:
+            if not os.path.isdir(os.path.join(root, f)):
+                continue
+            try:
+                fn(dest.library, f)
+                asked.append(f)
+            except Exception as exc:  # noqa: BLE001 -- the rename worked; say why Plex didn't scan
+                return f"Plex couldn't be asked to scan: {exc}"
+        return f"Plex is rescanning {asked[0]}." if len(asked) == 1 else \
+            (f"Plex is rescanning {len(asked)} show folders." if asked else "")
+
+    def undo(self):
+        from . import library
+        path = library.last_log(self.undo_dir())
+        if not path or self.win.busy("library-undo"):
+            return
+        log = library.read_log(path)
+        folders = list(log.get("scan_folders") or [])
+        dest, ctl, rescan = self.dest, self.win.ctl, self.rescan.isChecked() and self.rescan.isEnabled()
+
+        def run(progress):
+            n, skipped = library.undo(path, progress)
+            return n, skipped, self._plex_scan(ctl, dest, folders) if rescan and dest else ""
+
+        def ok(result):
+            n, skipped, plex = result
+            text = f"Put back the old names of {plural(n, 'file')}."
+            if skipped:
+                text += f" {plural(len(skipped), 'file')} couldn't be put back: {skipped[0]}"
+            self.result = f"{text} {plex}".strip()
+            self.forget(folders)
+            self.load_shows()
+
+        self.win.run_task("library-undo", run, ok=ok, title="Couldn't undo the rename",
+                          next_step="Check that the NAS share is mounted, then try again.", done=self.update_buttons)
+        self.update_buttons()
+
+    def forget(self, folders: list[str]):
+        """Drop what was checked for these show folders, so they are checked again from disk."""
+        for f in folders:
+            for cache in (self.scans, self.looks, self.plans):
+                cache.pop(f, None)
+        self.fixes = {k: v for k, v in self.fixes.items() if k.split("/", 1)[0] not in folders}
+
+
+# ---------------------------------------------------------------------------
 # Settings page
 # ---------------------------------------------------------------------------
 
@@ -4660,6 +5428,50 @@ class SettingsPage(QWidget):
         dests.lay.addWidget(foot)
         col.addWidget(dests)
 
+        # File names (naming.Scheme): used for new rips, and the default on the Library page.
+        names = Card(spacing=14)
+        names.lay.addWidget(label("File names", "h2"))
+        names.lay.addWidget(label("Every choice here is a name Plex reads. Used for new rips, and offered on the "
+                                  "Library page for files already on the NAS.", "small", wrap=True))
+        ngrid = QGridLayout()
+        ngrid.setHorizontalSpacing(20)
+        ngrid.setVerticalSpacing(14)
+        self.name_combos: dict[str, QComboBox] = {}
+        for k, (attr, caption, choices) in enumerate((
+                ("name_episode", "Episodes", (("name", "S01E01 - Episode name (default)"), ("code", "S01E01"),
+                                              ("name_quality", "S01E01 - Episode name [quality]"))),
+                ("name_show_year", "Show folder", ((True, "Name and year (default)"), (False, "Name only"))),
+                ("name_season_pad", "Season folder", ((True, "Season 01 (default)"), (False, "Season 1"))),
+                ("name_film", "Films", (("year", "Name and year (default)"), ("edition", "Name, year and edition"),
+                                        ("edition_quality", "Name, year, edition and quality"))))):
+            combo = NoWheelComboBox()
+            for data, text in choices:
+                combo.addItem(text, data)
+            combo.currentIndexChanged.connect(lambda _i: self.names_changed())
+            self.name_combos[attr] = combo
+            ngrid.addWidget(field(caption, combo), k // 2, k % 2)
+            ngrid.setColumnStretch(k % 2, 1)
+        names.lay.addLayout(ngrid)
+        self.name_safe = QCheckBox()
+        self.name_safe.toggled.connect(lambda _on: self.names_changed())
+        names.lay.addWidget(Option(self.name_safe, "Replace characters a Windows share can't store",
+                                   "A colon becomes “ - ”, and ? * \" < > | are removed. Leave it on for a NAS "
+                                   "share; the show's name in Plex still comes from its own records."))
+        self.name_example = label("", "paths")
+        self.name_example.setStyleSheet(f"background: {SIDE}; border-radius: 8px; padding: 10px 14px; "
+                                        "line-height: 190%;")
+        self.name_example.setWordWrap(True)
+        self.name_example.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        names.lay.addWidget(field("Example", self.name_example))
+        to_lib = label(f'To rename what\'s already in the library, open <a href="#" style="color:{LINK}; '
+                       'text-decoration:none">Library</a>. It lists every change before anything is renamed.',
+                       "small", wrap=True)
+        to_lib.setTextFormat(Qt.TextFormat.RichText)
+        to_lib.linkActivated.connect(lambda _h: win.show_page("library"))
+        to_lib.setAccessibleName("Rename files already in the library")
+        names.lay.addWidget(to_lib)
+        col.addWidget(names)
+
         hdr = Card(spacing=16)
         self.hdr = HdrStatus()
         hdr.lay.addLayout(hbox(vbox(label("HDR and versions", "h2"),
@@ -4683,7 +5495,8 @@ class SettingsPage(QWidget):
         hdr.lay.addWidget(Option(self.keep_1080, "Keep a 1080p Blu-ray from the same set as a second version",
                                  "Plex picks it for phones and remote streams, so the NAS doesn't have to convert 4K "
                                  "HDR. Adds about 20–30 GB per film."))
-        names = label("Severance (2022) - S01E01 - 2160p.mkv\nSeverance (2022) - S01E01 - 1080p.mkv", "paths")
+        names = label("Severance (2022) - S01E01 - Good News About Hell - 2160p.mkv\n"
+                      "Severance (2022) - S01E01 - Good News About Hell - 1080p.mkv", "paths")
         names.setStyleSheet(f"background: {SIDE}; border-radius: 8px; padding: 10px 14px; line-height: 190%;")
         hdr.lay.addWidget(field("How the two versions are named, side by side in the same folder", names))
         col.addWidget(hdr)
@@ -4922,6 +5735,43 @@ class SettingsPage(QWidget):
         self.plex_url.setText(re.sub(r"^http://", "", cfg.plex_url))
         self.update_free()
         self.update_plex_status()
+        self.load_names()
+
+    NAME_FIELDS = ("name_episode", "name_show_year", "name_season_pad", "name_film", "name_safe_chars")
+
+    def load_names(self):
+        cfg = self.win.cfg
+        for attr, combo in self.name_combos.items():
+            combo.blockSignals(True)
+            combo.setCurrentIndex(max(0, combo.findData(getattr(cfg, attr))))
+            combo.blockSignals(False)
+        self.name_safe.blockSignals(True)
+        self.name_safe.setChecked(cfg.name_safe_chars)
+        self.name_safe.blockSignals(False)
+        self.names_changed()
+
+    def name_scheme(self):
+        from .naming import Scheme
+        c = self.name_combos
+        return Scheme(c["name_episode"].currentData(), bool(c["name_show_year"].currentData()),
+                      bool(c["name_season_pad"].currentData()), c["name_film"].currentData(),
+                      self.name_safe.isChecked())
+
+    def names_changed(self):
+        """The example names, with made-up shows, under the choices as they are now."""
+        from .naming import episode_relpath, movie_relpath
+        s = self.name_scheme()
+        edition = "Special Edition" if s.film != "year" else ""
+        self.name_example.setText("\n".join((
+            episode_relpath("Bluey", 2018, 1, 20, title="Markets", quality="1080p", scheme=s),
+            episode_relpath("Star Trek: The Next Generation", 1987, 1, 1, 2, title="Encounter at Farpoint",
+                            quality="1080p", scheme=s),
+            movie_relpath("Aliens", 1986, edition=edition, quality="2160p", scheme=s))))
+
+    def save_names(self, cfg) -> None:
+        s = self.name_scheme()
+        cfg.name_episode, cfg.name_show_year, cfg.name_season_pad = s.episode, s.show_year, s.season_pad
+        cfg.name_film, cfg.name_safe_chars = s.film, s.safe_chars
 
     def _add_row(self, d: configmod.Destination):
         names = []
@@ -5045,12 +5895,15 @@ class SettingsPage(QWidget):
         cfg.av1_when = self.av1_when.currentData()
         cfg.rip_dir = rip
         cfg.plex_url = url or cfg.plex_url
+        self.save_names(cfg)
         try:
             self.win.save_config(cfg)
         except Exception as exc:
             for f in ("destinations", "hdr", "keep_1080p_version", "copy_as_ripped", "stream_films",
                       "read_title_cards", "av1_enabled", "av1_encoder", "av1_quality", "av1_grain", "av1_check",
                       "av1_when", "rip_dir", "plex_url"):
+                setattr(cfg, f, getattr(old, f))
+            for f in self.NAME_FIELDS:
                 setattr(cfg, f, getattr(old, f))
             self.win.error("Couldn't save the settings", str(exc), "Check there is free space in your home folder.")
             return
@@ -5401,12 +6254,13 @@ class MainWindow(QMainWindow):
         divider.setObjectName("divider")
         for key, text in (("info", "Disc info"), ("history", "History"), ("settings", "Settings")):
             self.nav_buttons[key] = NavButton(text)
+        self.nav_buttons["library"] = NavButton("Library")
         for key in ("queue", "rip", "match", "copy", "info"):
             nl.addWidget(self.nav_buttons[key])
         nl.addSpacing(10)
         nl.addWidget(divider)
         nl.addSpacing(10)
-        for key in ("history", "settings"):
+        for key in ("history", "library", "settings"):
             nl.addWidget(self.nav_buttons[key])
         nl.addStretch(1)
         foot = QFrame()
@@ -5431,6 +6285,8 @@ class MainWindow(QMainWindow):
         self.settings = SettingsPage(self)
         self.pages = {"queue": self.queue, "rip": self.rip, "match": self.match, "copy": self.copy, "info": self.info,
                       "history": self.history, "settings": self.settings}
+        self.library = LibraryPage(self)
+        self.pages["library"] = self.library
         for key, page in self.pages.items():
             self.stack.addWidget(page)
             self.nav_buttons[key].clicked.connect(lambda _c=False, key=key: self.show_page(key))

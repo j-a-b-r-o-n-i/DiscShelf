@@ -1744,10 +1744,11 @@ class Controller(QueueViews):
                  if f.dest_rel and f.title_index in self._locked(job)}
         order = sorted({m.title_index for m in job.matches} - set(fixed))
         by = {m.title_index: m for m in job.matches}
+        scheme = naming.Scheme.from_config(self.cfg)
         rels: list[str | None] = []
         for ti in order:
             try:
-                rels.append(naming.relpath_for(job, by[ti], layout))
+                rels.append(naming.relpath_for(job, by[ti], layout, scheme))
             except ValueError:
                 if strict:
                     raise
@@ -2179,9 +2180,10 @@ class Controller(QueueViews):
         if main:
             folder = collections.Counter(main).most_common(1)[0][0]
         elif job.show.strip():
-            folder = naming.show_folder(job.show, job.year)
+            scheme = naming.Scheme.from_config(self.cfg)
+            folder = naming.show_folder(job.show, job.year, scheme)
             if self._layout(job) != "movie" and job.season is not None:
-                folder += f"/Season {job.season:02d}"
+                folder += "/" + naming.season_folder(job.season, scheme)
         else:
             folder = ""
         return os.path.join(job.destination, folder) if folder else job.destination
@@ -2730,6 +2732,19 @@ class Controller(QueueViews):
 
     def plex_signed_in(self) -> bool:
         return bool(config.load_secret("plex_token"))
+
+    def plex_scan_folder(self, library: str, rel: str) -> str:
+        """Ask Plex to scan one folder of a library; rel is under the destination folder. Returns
+        a sentence for the Library page. Raises PlexError when Plex can't be asked."""
+        token = config.load_secret("plex_token")
+        if not library or not self.cfg.plex_url or not token:
+            return "Plex wasn't asked to scan: sign in to Plex and choose its library for this destination in Settings."
+        plex = Plex(self.cfg.plex_url, token, fetch=self.plex_fetch)
+        section = plex.section(library)
+        if not section:
+            raise PlexError(f"Plex has no library called “{library}”. Choose the right one in Settings.")
+        plex.refresh(section["key"], plex.plex_path(section, rel))
+        return f"Plex is scanning {rel}."
 
     def plex_libraries(self) -> list[str]:
         token = config.load_secret("plex_token")

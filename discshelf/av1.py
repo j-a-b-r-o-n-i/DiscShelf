@@ -163,7 +163,8 @@ def is_4k(width: int) -> bool:
     return (width or 0) >= 3000
 
 
-_VERSION_SUFFIX = re.compile(r" - (?:2160p|1080p)$", re.IGNORECASE)
+# The remux's own version and quality tag: " - 2160p", " [2160p]", or both.
+_VERSION_SUFFIX = re.compile(r"(?: - (?:2160p|1080p)| \[(?:2160p|1080p)\])+$", re.IGNORECASE)
 
 
 def av1_name(remux_rel: str) -> str:

@@ -87,6 +87,62 @@ over every episode of the show.
 - **Plex sign-in** uses Plex's PIN flow. The token is stored in
   `~/.config/disc-shelf/secrets.json`, readable only by you.
 
+## File names
+
+Settings → File names. Every choice is a name Plex reads, because Plex matches an episode
+by the show folder, the season and the `S01E01` code, and ignores the rest of the name.
+
+- **Episodes**: `Show (Year)/Season 01/Show (Year) - S01E01 - Episode name.mkv` by default.
+  The other choices are the code alone (`… - S01E01.mkv`), or the name followed by the
+  quality of the video (`… - S01E01 - Episode name [1080p].mkv`).
+- **Show and season folders**: the year can be left out of the show folder, and the season
+  folder can be `Season 1` instead of `Season 01`.
+- **Two episodes in one title** are `S01E01-E02`. The name is the shared name of a two-part
+  episode ("Encounter at Farpoint" for parts 1 and 2), or both names joined with "&".
+- **A second cut of an episode** keeps the episode's code and name and adds the version,
+  for example `Bluey (2018) - S01E20 - Markets - Short cut.mkv`. Plex lists the two files
+  as one episode and offers both under Play Version.
+- **Films**: `Aliens (1986)/Aliens (1986).mkv`, or with an edition the way Plex reads it,
+  `Aliens (1986) {edition-Special Edition}.mkv`, optionally followed by the quality
+  (`[2160p]`). Every edition and version of a film sits in the one folder.
+- **Characters a Windows share can't store** are replaced by default: a colon becomes
+  " - ", and `? * " < > |` are removed. Turned off, only `/` is removed.
+
+Two titles matched to the same episode with no version get " (2)" added to the second
+name, so neither is overwritten. That's rare now that versions are named.
+
+## Library
+
+The Library page checks the files already in a TV destination and renames them to the
+file-name scheme. Films aren't checked yet.
+
+- **Checking a show** lists its folder (subfolders too, so release folders work) and reads
+  each video's episode code from its name: `S01E02`, `S01 E02`, `S01E02-E03`, `1x02`, and a
+  bare `E02` inside a season folder. A file with no code is matched by its name when exactly
+  one episode on TVmaze has that name, which covers libraries numbered 001, 002 and so on.
+  The show is found on TVmaze from the folder's name and year; when that's ambiguous, the
+  page says so and lets you pick the show.
+- **It's read-only.** Nothing changes until you choose Rename. On a network share only the
+  folders are listed; sizes are read only for files that share an episode.
+- **What it reports**: each episode of the seasons present as a square (a title card read
+  for it, no card read, two files, no file, or not on TVmaze); files that hold the same
+  episode; files with no episode code or one TVmaze doesn't know; and files in the wrong
+  season folder. When Disc Shelf ripped a file and read its title card, the page says what
+  the card read.
+- **Two files of one episode**: keep the second as another version (the default), move it
+  to the show's `Featurettes` folder as an extra, or set it aside in a `Set aside` folder in
+  the show's folder, with a `.plexignore` so Plex skips it. Nothing is deleted.
+- **What changes** lists every old name and its new one. The scheme can be changed for one
+  rename without changing Settings, and the rename can cover one show or every show in the
+  destination. Shows whose TVmaze match needs a decision wait.
+- **Renaming** moves files within the share (no copying), takes subtitles, `.nfo` and
+  `-thumb.jpg` files with the same name along, makes folders as needed and removes folders
+  left empty. It refuses to start if a new name is already taken by another file.
+- **Undo last rename** puts the old names back. Each rename is logged in
+  `~/.local/state/disc-shelf/library-undo/`.
+- **Plex** is asked to rescan the show's folder afterwards when you're signed in. Watched
+  status belongs to the episode, so it survives the new names.
+
 ## Queue
 
 The Queue lists discs by what they need rather than by date.
@@ -150,6 +206,7 @@ Plex keeps playing them the remux.
 - **Lost titles**: when the app opens, it puts back any ripped title a job lost track of.
 - **Cover art**: cached in `~/.local/state/disc-shelf/covers/`.
 - **AV1 encode measurements**: `~/.local/state/disc-shelf/av1_stats.json`.
+- **Library rename logs**: `~/.local/state/disc-shelf/library-undo/`, one per rename.
 
 ## Command line
 

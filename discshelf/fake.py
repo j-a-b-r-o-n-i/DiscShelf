@@ -30,7 +30,7 @@ from .config import Config, sample_destinations
 from .discinfo import AudioInfo, DiscReport, SubtitleInfo, TitleInfo, VideoInfo
 from .match import feature_match, match_titles, match_list, parse_episode_list
 from .models import Disc, Drive, EncodeJob, Episode, HdrInfo, Job, Match, RippedFile, Sample, Stream, Title, TitleProgress
-from .naming import EXTRAS_FOLDERS, dedupe, relpath_for, show_folder
+from .naming import EXTRAS_FOLDERS, Scheme, dedupe, relpath_for, season_folder, show_folder
 from .pipeline import (ENCODE_ACTIVE, CardStatus, EncodeStatus, QueueView, QueueViews, _enc, _encode_holds,
                        _video_width)
 
@@ -117,7 +117,13 @@ SHOWS = [
     SimpleNamespace(id=44933, name="Severance", year=2022, network="Apple TV+"),
     SimpleNamespace(id=526, name="The Office (US)", year=2005, network="NBC"),
     SimpleNamespace(id=527, name="The Office", year=2001, network="BBC Two"),
+    SimpleNamespace(id=41821, name="Bluey", year=2018, network="ABC Kids"),
 ]
+
+BLUEY_S1 = ["Magic Xylophone", "Hospital", "Keepy Uppy", "Daddy Robot", "Shadowlands", "The Weekend", "BBQ",
+            "Fruitbat", "Horsey Ride", "Hotel", "Bike", "Bob Bilby", "Spy Game", "Takeaway", "Butterflies",
+            "Yoga Ball", "Calypso", "The Doctor", "The Claw", "Markets", "Blue Mountains", "The Pool", "Shops",
+            "Wagon Ride", "Taxi", "The Beach"]
 
 EPISODES = {
     (44933, 1): [(1, "Good News About Hell", 57), (2, "Half Loop", 54), (3, "In Perpetuity", 52),
@@ -128,7 +134,29 @@ EPISODES = {
                (4, "Grief Counseling", 22), (5, "Initiation", 22), (6, "Diwali", 22), (7, "Branch Closing", 22),
                (8, "The Merger", 22), (9, "The Convict", 27), (10, "A Benihana Christmas", 42),
                (11, "Back from Vacation", 22), (12, "Traveling Salesmen", 22)],
+    (41821, 1): [(n, name, 7) for n, name in enumerate(BLUEY_S1, 1)],
 }
+
+
+def _sample_library(root: str) -> None:
+    """Empty files standing in for a TV library that needs tidying, for the Library page:
+    Bluey named the old way (no episode names) with a second Markets from the "(2)" dedupe,
+    a stray clip and a misplaced episode; Severance already named the Plex way; and a
+    release folder of The Office."""
+    files = [f"Bluey (2018)/Season 01/Bluey (2018) - S01E{n:02d}.mkv" for n in range(1, 27) if n != 24]
+    files += ["Bluey (2018)/Season 01/Bluey (2018) - S01E20 (2).mkv",
+              "Bluey (2018)/Season 01/Bluey (2018) - S01E01.en.srt",
+              "Bluey (2018)/Season 02/Bluey (2018) - S01E24.mkv",
+              "Bluey (2018)/Season 01/bonus clip.mkv",
+              "Bluey (2018)/Featurettes/Making Bluey.mkv"]
+    files += [f"Severance (2022)/Season 01/Severance (2022) - S01E{n:02d} - {t}.mkv"
+              for n, t, _rt in EPISODES[(44933, 1)]]
+    files += [f"The.Office.S03.720p.WEB/The.Office.S03E{n:02d}.720p.WEB.x264.mkv" for n in range(1, 13)]
+    for rel in files:
+        path = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(b"\0" * (900 if "(2)" in rel else 1000))   # the second Markets is the shorter one
 
 
 RIP_TICK = 10.0      # simulated seconds per step while ripping (one sample per step)
@@ -197,6 +225,8 @@ class FakeController(QueueViews):
         self.ejected = 0
         self._enc_phase: dict[tuple[str, int], float] = {}   # (job id, title) -> when its check or copy began
         self._enc_tick = time.monotonic()
+        self._library_root: str | None = None
+        self.plex_scans: list[tuple[str, str]] = []     # (library, folder) the Library page asked Plex to scan
         self._seed()
 
     # -- sample history -----------------------------------------------------
@@ -470,7 +500,7 @@ class FakeController(QueueViews):
         keep = ripped | {t.index for t in job.titles if t.selected}
         with self.job_lock:
             ms = [m for m in job.matches if m.title_index in keep and m.target != "skip"]
-            paths = dedupe([relpath_for(job, m, layout) for m in ms])
+            paths = dedupe([relpath_for(job, m, layout, Scheme.from_config(self.cfg)) for m in ms])
         return [(m.title_index, p) for m, p in zip(ms, paths) if p]
 
     def update_matches(self, job: Job, matches: list[Match]) -> None:
@@ -724,7 +754,8 @@ class FakeController(QueueViews):
         layout = d.layout if d else "tv"
         by_title = {m.title_index: m for m in job.matches}
         files = [f for f in job.files if f.title_index in by_title]
-        paths = dedupe([relpath_for(job, by_title[f.title_index], layout) for f in files])
+        scheme = Scheme.from_config(self.cfg)
+        paths = dedupe([relpath_for(job, by_title[f.title_index], layout, scheme) for f in files])
         out = []
         for f, p in zip(files, paths):
             f.dest_rel = p or ""
@@ -913,9 +944,10 @@ class FakeController(QueueViews):
         dirs = [d for d in dirs if os.path.basename(d) not in EXTRAS_FOLDERS] or [os.path.dirname(d) for d in dirs]
         if dirs:
             return os.path.join(job.destination, max(set(dirs), key=dirs.count))
-        folder = show_folder(job.show, job.year)
+        scheme = Scheme.from_config(self.cfg)
+        folder = show_folder(job.show, job.year, scheme)
         if self._layout(job) != "movie" and job.season is not None:
-            folder += f"/Season {job.season:02d}"
+            folder += "/" + season_folder(job.season, scheme)
         return os.path.join(job.destination, folder)
 
     def reverify(self, job: Job, progress) -> list[str]:
@@ -1087,6 +1119,56 @@ class FakeController(QueueViews):
         return self._signed_in and self._polls >= 2
 
     # -- extras the window uses when present ----------------------------------
+    # -- the Library page ----------------------------------------------------
+    def _library(self) -> str:
+        if self._library_root is None:
+            self._library_root = tempfile.mkdtemp(prefix="disc-shelf-library-")
+            atexit.register(shutil.rmtree, self._library_root, True)
+            for d in self.cfg.destinations:
+                os.makedirs(os.path.join(self._library_root, d.kind), exist_ok=True)
+            tv = self.cfg.destination("tv")
+            if tv:
+                _sample_library(os.path.join(self._library_root, tv.kind))
+            os.makedirs(os.path.join(self._library_root, ".undo"), exist_ok=True)
+        return self._library_root
+
+    def library_path(self, dest) -> str:
+        """Where the destination is on this computer: here, a temporary folder of sample shows."""
+        return os.path.join(self._library(), dest.kind)
+
+    def library_undo_dir(self) -> str:
+        return os.path.join(self._library(), ".undo")
+
+    def library_jobs(self) -> list[Job]:
+        """The jobs whose title-card readings the Library page shows, with a sample Bluey disc
+        whose card for the second Markets was read. It isn't in the queue."""
+        tv = self.cfg.destination("tv")
+        markets = Episode(1, 20, "Markets", 7)
+        read = [(n, BLUEY_S1[n - 1].upper()) for n in range(1, 13)]     # the first disc's cards, as read
+        bluey = Job(id="bluey-sample", show="Bluey", year=2018, season=1, disc_number=1, show_id=41821,
+                    destination=tv.path if tv else "", stage="done",
+                    titles=[Title(20, duration_s=441), Title(26, duration_s=431)],
+                    matches=[Match(20, "episode", markets, confidence="close", source="card",
+                                   note="The title card reads “MaRKeTS”, which is closest to “Markets”."),
+                             Match(26, "episode", markets, confidence="close", source="card",
+                                   note="The title card reads “MaRKeTS”, which is closest to “Markets”.",
+                                   version="Short cut")],
+                    files=[RippedFile(20, "", dest_rel="Bluey (2018)/Season 01/Bluey (2018) - S01E20.mkv",
+                                      state="verified"),
+                           RippedFile(26, "", dest_rel="Bluey (2018)/Season 01/Bluey (2018) - S01E20 (2).mkv",
+                                      state="verified")])
+        for n, text in read:
+            bluey.titles.append(Title(100 + n, duration_s=441))
+            bluey.matches.append(Match(100 + n, "episode", Episode(1, n, BLUEY_S1[n - 1], 7), confidence="close",
+                                       source="card", note=f"The title card reads “{text}”."))
+            bluey.files.append(RippedFile(100 + n, "", state="verified",
+                                          dest_rel=f"Bluey (2018)/Season 01/Bluey (2018) - S01E{n:02d}.mkv"))
+        return [bluey, *self.jobs()]
+
+    def plex_scan_folder(self, library: str, rel: str) -> str:
+        self.plex_scans.append((library, rel))
+        return f"Plex is scanning {rel}."
+
     def plex_signed_in(self) -> bool:
         return self._signed_in
 

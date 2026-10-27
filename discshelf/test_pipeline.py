@@ -103,7 +103,7 @@ def run():
             eps = [m.episode.number for m in ms if m.target == "episode"]
             check(eps == [1, 2, 3], f"disc 1 episodes: {eps}")
             files = ctl.plan_paths(job)
-            check(files[0].dest_rel == "Test Show/Season 01/Test Show - S01E01.mkv", f"path: {files[0].dest_rel}")
+            check(files[0].dest_rel == "Test Show/Season 01/Test Show - S01E01 - Episode 1.mkv", f"path: {files[0].dest_rel}")
 
             ctl.copy(job, lambda f, t: None, threading.Event())
             check(job.stage == "done" and all(f.state == "verified" for f in job.files), f"after copy: {job.stage}")
@@ -280,7 +280,7 @@ def run_overlap():
             ctl.suggest_matches(job, show_id=1)
             ctl.confirm_matches(job)
             preview = ctl.preview_paths(job)
-            check([p for _, p in preview][:1] == ["Test Show/Season 01/Test Show - S01E01.mkv"], f"preview: {preview}")
+            check([p for _, p in preview][:1] == ["Test Show/Season 01/Test Show - S01E01 - Episode 1.mkv"], f"preview: {preview}")
             th.join(30)
             check(not errors, f"rip raised: {errors}")
             check(job.copy_mode == "per_title" and not job.copy_mode_note, f"mode: {job.copy_mode} {job.copy_mode_note!r}")
