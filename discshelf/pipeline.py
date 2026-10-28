@@ -31,7 +31,7 @@ from typing import Callable
 
 from . import (av1, caseocr, classify, config, discdb, discinfo, hdr, makemkv, match, naming, ocr, theme, titlecard,
                transfer, watch)
-from . import nasfix, play, ripstats, season
+from . import nasfix, play, ripstats, scanwatch, season
 from .config import Config
 from .jobs import JobStore, now_iso
 from .models import Disc, Drive, EncodeJob, Episode, Job, Match, RippedFile, Sample, Span, Title, TitleProgress
@@ -73,10 +73,10 @@ def _scaled(progress: Progress, lo: float, hi: float) -> Progress:
     return lambda f, text: progress(lo + (hi - lo) * max(0.0, min(1.0, f)), text)
 
 
-def _rip_accepts(name: str) -> bool:
-    """Whether makemkv.rip_titles takes this keyword, so an older MakeMKV wrapper still works."""
+def _rip_accepts(name: str, fn=None) -> bool:
+    """Whether makemkv.rip_titles (or fn) takes this keyword, so an older MakeMKV wrapper still works."""
     try:
-        params = inspect.signature(makemkv.rip_titles).parameters
+        params = inspect.signature(fn or makemkv.rip_titles).parameters
     except (TypeError, ValueError):
         return False
     return name in params or any(p.kind == p.VAR_KEYWORD for p in params.values())
@@ -866,6 +866,9 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         self._cards: dict[str, dict[int, titlecard.TitleReading]] = {}   # job id → title cards read so far
         self._card_state: dict[str, dict[int, CardStatus]] = {}          # job id → each title's card status
         self._scans: dict[int, tuple[dict, Disc]] = {}
+        self._scan_watch: dict[int, scanwatch.ScanWatch] = {}
+        self._scan_cancel: dict[int, threading.Event] = {}
+        self.scan_times = scanwatch.ScanTimes(os.path.join(config.state_dir(), "scan-times.json"))
         self._pin_codes: dict[int, str] = {}
         self._covers: dict[tuple, tuple[str, str]] = {}
         self.job_lock = threading.RLock()
@@ -909,16 +912,35 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
     def _scan(self, drive_index: int) -> tuple[dict, Disc]:
         if not self._mkv.acquire(timeout=5):
             raise RuntimeError("The drive is busy with a rip or another scan. Scan again when it finishes.")
+        watch = scanwatch.ScanWatch()
+        cancel = threading.Event()
+        self._scan_watch[drive_index], self._scan_cancel[drive_index] = watch, cancel
         try:
-            parsed, disc = makemkv.scan_disc_parsed(self.cfg, drive_index, min_seconds=SCAN_MIN_SECONDS)
+            live = dict(watch=watch, cancel=cancel) if _rip_accepts("watch", makemkv.scan_disc_parsed) else {}
+            parsed, disc = makemkv.scan_disc_parsed(self.cfg, drive_index, min_seconds=SCAN_MIN_SECONDS, **live)
         finally:
             self._mkv.release()
+            self._scan_cancel.pop(drive_index, None)
+        self.scan_times.record(scanwatch.disc_kind(disc.uhd, disc.disc_type), watch.status().elapsed)
         classify.classify_titles(disc.titles, self.cfg.min_episode_minutes * 60)
         self._scans[drive_index] = (parsed, disc)
         return parsed, disc
 
     def scan(self, drive_index: int) -> Disc:
         return _copy.deepcopy(self._scan(drive_index)[1])
+
+    def scan_status(self, drive_index: int) -> scanwatch.ScanStatus | None:
+        """What the scan of this drive is doing, for the window to show while it runs."""
+        w = self._scan_watch.get(drive_index)
+        return w.status() if w is not None else None
+
+    def stop_scan(self, drive_index: int) -> None:
+        ev = self._scan_cancel.get(drive_index)
+        if ev is not None:
+            ev.set()
+
+    def scan_usual(self) -> str:
+        return self.scan_times.usual()
 
     def disc_info(self, drive_index: int) -> discinfo.DiscReport:
         cached = self._scans.get(drive_index)

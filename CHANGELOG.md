@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- While a disc scans, the Rip page shows each step with its time, including MakeMKV
+  fetching a 4K disc's keys from its server, which took over 5 minutes on a first 4K scan.
+  The panel also fills in a guess at the name and the NAS check meanwhile, and can rip a
+  film as soon as it's scanned.
+- A scan is no longer stopped after 10 minutes. It runs as long as MakeMKV makes progress;
+  after 3 minutes with none, the panel asks before stopping it.
+- The rip timeline's speed axis follows the reading speed. Copy speeds, kept in the same
+  list, had stretched it to 15,000 MB/s and flattened the line along zero; a single sample
+  far above the rest is now cut off at the top instead.
+
 - A disc is ripped in one MakeMKV run when the titles that weren't picked are small, instead
   of one run per title, so the disc is opened once rather than for every title. On a
   25-episode Blu-ray that saves about 17 minutes. Picked titles are still handed on one by

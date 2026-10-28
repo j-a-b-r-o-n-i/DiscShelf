@@ -47,7 +47,9 @@ from . import naming, nasfix, ripstats
 from . import timeline as tl
 from .seasonui import (ClickChip, CompareTitle, ComparePanel, FixOption, FixView, ProblemsBanner, SeasonGrid,
                        WatchChooser, watch_button)
-from .taskbar import TaskbarProgress
+from .makemkv import ScanStopped
+from .scanui import ScanPanel
+from .taskbar import TaskbarProgress, notify
 
 try:
     from .naming import EXTRAS_FOLDERS
@@ -1563,6 +1565,34 @@ def item(text: str, mono_font: QFont | None = None, muted: bool = False) -> QTab
 # Rip page
 # ---------------------------------------------------------------------------
 
+def main_film(titles: list[Title]) -> Title | None:
+    """The one title over 60 minutes, or None when there are none or several."""
+    long = [t for t in titles if t.duration_s >= 3600]
+    return long[0] if len(long) == 1 else None
+
+
+def nas_has(name: str, dests: list[tuple[str, str]]) -> str:
+    """Whether a destination already has a folder for this film or show, in one sentence.
+    Runs on a worker: listing a NAS share can hang while it reconnects."""
+    want = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+    found, missing = [], []
+    for label_, path in dests:
+        try:
+            names = os.listdir(path)
+        except OSError:
+            missing.append(label_)
+            continue
+        for n in names:
+            if re.sub(r"[^a-z0-9]+", " ", n.lower()).strip().startswith(want):
+                found.append(f"{label_} has a folder “{n}”")
+                break
+    if found:
+        return ". ".join(found) + "."
+    if missing and len(missing) == len(dests):
+        return "The NAS isn't reachable right now."
+    return "Not on the NAS yet."
+
+
 class RipPage(QWidget):
     def __init__(self, win: "MainWindow"):
         super().__init__()
@@ -1618,6 +1648,21 @@ class RipPage(QWidget):
         self.stream_note.hide()
         disc.lay.addWidget(self.stream_note)
         col.addWidget(disc)
+
+        # While a disc scans: its steps, why it's slow, and what can be settled meanwhile.
+        self.scan_panel = ScanPanel()
+        self.scan_panel.hide()
+        self.scan_panel.stop_clicked.connect(lambda: self.stop_scan())
+        self.scan_panel.rescan_clicked.connect(lambda: self.stop_scan(then="scan"))
+        self.scan_panel.eject_clicked.connect(lambda: self.stop_scan(then="eject"))
+        self.scan_panel.after_scan_changed.connect(lambda v: self._save_setting("after_scan", v))
+        self.scan_panel.notify_changed.connect(lambda on: self._save_setting("notify_scan_done", on))
+        self.scan_timer = QTimer(self)
+        self.scan_timer.setInterval(500)
+        self.scan_timer.timeout.connect(self.tick_scan)
+        self._scan_drive: Drive | None = None
+        self._after_stop = ""
+        col.addWidget(self.scan_panel)
 
         # Titles card
         tcard = Card(margins=(0, 0, 0, 0), spacing=0)
@@ -2057,7 +2102,7 @@ class RipPage(QWidget):
     # -- actions ------------------------------------------------------------
     def scan(self, auto: bool = False):
         drive = self.drive_combo.currentData()
-        if drive is None:
+        if drive is None or "scan" in self.win.tasks:
             return
         win, ctl = self.win, self.win.ctl
 
@@ -2065,13 +2110,83 @@ class RipPage(QWidget):
             try:
                 disc = ctl.scan(drive.index)
                 return disc, ctl.new_job(disc)
+            except ScanStopped:
+                win._auto_failed = True         # stopped by hand: wait for the next disc
+                return None
             except Exception:
                 if auto:
                     win._auto_failed = True     # don't retry this disc until it comes out
                 raise
 
-        self.win.run_task("scan", work, ok=lambda r: self.scanned(*r), title="Couldn't read the disc",
-                          next_step="Check that the disc is clean, then choose Scan again.")
+        self.start_scan_panel(drive)
+        self.win.run_task("scan", work, ok=lambda r: r and self.scanned(*r), title="Couldn't read the disc",
+                          next_step="Check that the disc is clean, then choose Scan again.",
+                          done=self.scan_finished)
+
+    # -- while a disc scans ---------------------------------------------------
+    def start_scan_panel(self, drive: Drive):
+        """Show the scan panel, and fill in what the disc's name alone can tell."""
+        win, ctl, cfg = self.win, self.win.ctl, self.win.cfg
+        if not hasattr(ctl, "scan_status"):
+            return
+        self._scan_drive = drive
+        label_ = drive.disc_label or ""
+        name = ctl.show_name(label_, label_) if label_ and hasattr(ctl, "show_name") else ""
+        usual = ctl.scan_usual() if hasattr(ctl, "scan_usual") else ""
+        self.scan_panel.start(label_, drive.model, usual, cfg.after_scan, cfg.notify_scan_done)
+        if self.job is None:
+            self.disc_meta.setText(" · ".join(p for p in (label_, drive.model) if p))
+            self.disc_meta.setVisible(bool(label_ or drive.model))
+            self.disc_title.setText(name or label_ or "Scanning the disc")
+            self.disc_sum.setText("Scanning. The titles appear here when it finishes.")
+        panel = self.scan_panel
+        panel.set_fact("Looks like", f"{name}, guessed from the disc's name" if name else "No name on the disc yet")
+        for key, kind in (("Films go to", "movie"), ("Shows go to", "tv")):
+            d = cfg.destination(kind)
+            panel.set_fact(key, f"{d.label} · {d.path}" if d else "Not set up in Settings")
+        hdr = cfg.hdr
+        panel.set_fact("HDR", "Kept exactly as on the disc (RAW)" if hdr.is_raw else " ".join(hdr.raw_reasons()))
+        if getattr(cfg, "av1_enabled", False):
+            enc = {"cpu": "best quality, on the CPU", "gpu": "fast, on the GPU"}.get(cfg.av1_encoder, cfg.av1_encoder)
+            panel.set_fact("AV1 version", f"Made for 4K discs, {enc}")
+        else:
+            panel.set_fact("AV1 version", "Off in Settings")
+        names = lambda codes: ", ".join(LANG_NAMES.get(c, c) for c in codes) or "None"   # noqa: E731
+        panel.set_fact("Languages", f"Audio: {names(cfg.audio_langs)}. Subtitles: {names(cfg.subtitle_langs)}.")
+        panel.set_fact("On the NAS", "Checking…" if name else "Checked once the disc has a name")
+        if name:
+            dests = [(d.label, d.path) for d in cfg.destinations]
+            win.run_task(f"nascheck:{label_}", lambda _p: nas_has(name, dests),
+                         ok=lambda text: self.scan_panel.set_fact("On the NAS", text), quiet=True)
+        self.scan_timer.start()
+        self.tick_scan()
+
+    def tick_scan(self):
+        if self._scan_drive is None:
+            return
+        self.scan_panel.show_status(self.win.ctl.scan_status(self._scan_drive.index))
+
+    def stop_scan(self, then: str = ""):
+        if self._scan_drive is not None and hasattr(self.win.ctl, "stop_scan"):
+            self._after_stop = then
+            self.win.ctl.stop_scan(self._scan_drive.index)
+
+    def scan_finished(self):
+        self.scan_timer.stop()
+        self.scan_panel.hide()
+        self._scan_drive = None
+        if self.job is None:
+            self.load(None, None)
+        then, self._after_stop = self._after_stop, ""
+        if then == "scan":
+            self.win._auto_failed = False
+            QTimer.singleShot(0, lambda: self.scan())
+        elif then == "eject":
+            QTimer.singleShot(0, self.eject)
+
+    def _save_setting(self, name: str, value):
+        setattr(self.win.cfg, name, value)
+        self.win.save_config(self.win.cfg)
 
     def scanned(self, disc: Disc, job: Job):
         self._stream_on = {}
@@ -2082,6 +2197,24 @@ class RipPage(QWidget):
         # header dot show the disc.
         QTimer.singleShot(0, lambda: self.win.refresh_drives(poll=False))
         self.load_cover(disc, job.season)
+        film = main_film(job.titles) if self.win.layout_of(job) == "movie" else None
+        if self.win.cfg.after_scan == "rip_film" and film is not None:
+            for t in job.titles:
+                t.selected = t.index == film.index
+            self.load(disc, job)
+            QTimer.singleShot(0, lambda: self.after_scan(job, rip=True))
+        else:
+            self.after_scan(job, rip=False)
+
+    def after_scan(self, job: Job, rip: bool):
+        """Start the main film's rip if Settings asks for it, and say the disc is ready."""
+        started = False
+        if rip and self.job is job and self.rip_btn.isEnabled() and not self.ripping():
+            self.rip_clicked()
+            started = True
+        if self.win.cfg.notify_scan_done and not self.win.isActiveWindow():
+            name = job.show or job.disc_label
+            notify(f"Ripping {name}" if started else f"{name} is ready to rip", disc_summary(job.titles), DESKTOP_ICON)
 
     def load_cover(self, disc: Disc, season: int | None = None):
         """Fetch the cover on a worker: it may mount the disc or ask TVmaze."""

@@ -25,7 +25,7 @@ import zlib
 import time
 from types import SimpleNamespace
 
-from . import av1, makemkv, nasfix, season
+from . import av1, makemkv, nasfix, scanwatch, season
 from .play import Player
 from .config import Config, sample_destinations
 from .discinfo import AudioInfo, DiscReport, SubtitleInfo, TitleInfo, VideoInfo
@@ -252,6 +252,10 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         self._enc_tick = time.monotonic()
         self._library_root: str | None = None
         self.plex_scans: list[tuple[str, str]] = []     # (library, folder) the Library page asked Plex to scan
+        self.scan_times = scanwatch.ScanTimes(None)      # kept in memory, never in the state folder
+        self.scan_key_steps = 6                         # simulated requests to MakeMKV's server on a 4K disc
+        self._scan_watch: scanwatch.ScanWatch | None = None
+        self._scan_cancel: threading.Event | None = None
         self._seed()
 
     # -- sample history -----------------------------------------------------
@@ -445,12 +449,50 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
     def scan(self, drive_index: int) -> Disc:
         if drive_index != 0:
             raise RuntimeError(f"There is no drive {drive_index}.")
-        self._sleep(steps=8)
+        # The same steps a real scan shows: a 4K disc fetches its keys from MakeMKV's server first.
+        watch = scanwatch.ScanWatch()
+        cancel = threading.Event()
+        self._scan_watch, self._scan_cancel = watch, cancel
+        uhd = self._slot is not None and self._discs[self._slot][0].uhd
+        try:
+            watch.line('MSG:1005,0,1,"MakeMKV v1.18.3 linux(x64-release) started","%1 started","MakeMKV"')
+            if self._sleep(cancel, steps=2):
+                raise makemkv.ScanStopped("The scan was stopped.")
+            if uhd:
+                watch.line('MSG:1011,0,1,"Using LibreDrive mode (v06.3 id=000000000000)","%1","x"')
+                for k in range(int(self.scan_key_steps)):
+                    watch.connections({40000 + k})
+                    if self._sleep(cancel):
+                        raise makemkv.ScanStopped("The scan was stopped.")
+            watch.line('PRGC:5018,0,"Scanning contents"')
+            if self._sleep(cancel, steps=4):
+                raise makemkv.ScanStopped("The scan was stopped.")
+            watch.line("TCOUNT:3")
+        finally:
+            watch.finish()
+            self._scan_cancel = None
         if self._slot is None:
             raise RuntimeError("The drive is empty. Put a disc in and scan again.")
         disc = copy.deepcopy(self._discs[self._slot][0])
         disc.drive = self.drives()[0]
+        self.scan_times.record(scanwatch.disc_kind(disc.uhd, disc.disc_type), watch.status().elapsed)
         return disc
+
+    def scan_status(self, drive_index: int):
+        w = getattr(self, "_scan_watch", None)
+        return w.status() if w is not None and drive_index == 0 else None
+
+    def stop_scan(self, drive_index: int) -> None:
+        ev = getattr(self, "_scan_cancel", None)
+        if ev is not None:
+            ev.set()
+
+    def scan_usual(self) -> str:
+        return self.scan_times.usual()
+
+    def show_name(self, disc_name: str, label: str = "") -> str:
+        from .pipeline import Controller
+        return Controller.show_name(disc_name, label)
 
     def disc_info(self, drive_index: int) -> DiscReport:
         rep = self._disc_info(drive_index)

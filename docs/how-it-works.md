@@ -7,6 +7,23 @@ This walks through each screen and the decisions Disc Shelf makes for you.
 - **A disc is scanned as soon as it's in the drive.** Disc Shelf asks the drive for its
   status every 3 seconds with the kernel's CD-ROM status request, which doesn't start
   MakeMKV or spin the disc up.
+- **While it scans**, the Rip page shows a clock and each step with its time: opening the
+  disc, LibreDrive, getting the disc's keys from MakeMKV's server, and reading the titles.
+  MakeMKV's output is read as it arrives.
+  - A 4K disc's first scan can take several minutes. MakeMKV looks up the disc's keys on
+    its own server, about one request a second, and the drive is idle meanwhile. Disc Shelf
+    counts those requests by reading MakeMKV's connections from `/proc`, and draws them per
+    10 seconds. Inside Disc Shelf's Flatpak, MakeMKV runs on the host and its connections
+    can't be seen, so the key step isn't shown there.
+  - There's no time limit. After 3 minutes with no output and no server requests (10
+    minutes when the requests can't be seen), the panel asks whether to stop and scan
+    again, keep waiting, or eject. Stop scan is there the whole time.
+  - The disc's name gives a guess at the film or show, and the NAS is checked for a folder
+    with that name, while MakeMKV works.
+  - "When the scan finishes" can rip a film's main title straight away: the one title over
+    60 minutes, when there's exactly one. A desktop notification says the disc is ready,
+    or that it's ripping, when the window isn't in front.
+  - How long each kind of disc took is kept, and the clock shows the usual times.
 - **Short titles are left out.** MakeMKV scans at a 2-minute minimum title length, and the
   rip uses the same value, because MakeMKV numbers titles after dropping short ones.
 - **Each title gets a type**: episode, film, play-all, duplicate, extra, or short (under
@@ -316,6 +333,7 @@ Plex keeps playing them the remux.
 - **Lost titles**: when the app opens, it puts back any ripped title a job lost track of.
 - **Cover art**: cached in `~/.local/state/disc-shelf/covers/`.
 - **AV1 encode measurements**: `~/.local/state/disc-shelf/av1_stats.json`.
+- **Scan times**: `~/.local/state/disc-shelf/scan-times.json`, the last 20 of each kind of disc.
 - **Library rename logs**: `~/.local/state/disc-shelf/library-undo/`, one per rename.
 
 ## Command line

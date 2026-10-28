@@ -80,6 +80,8 @@ class Config:
     name_film: str = "year"      # "year": Aliens (1986) | "edition": … {edition-…} | "edition_quality": … [2160p]
     name_safe_chars: bool = True # replace characters a Windows share can't store (":" becomes " -")
     eject_after_rip: bool = True     # open the tray once a rip finishes without an error, ready for the next disc
+    after_scan: str = "show"         # "show": wait for Rip | "rip_film": rip a film's main title as soon as it's scanned
+    notify_scan_done: bool = True    # a desktop notification when a scan finishes and the window isn't in front
     # The AV1 second version of a 4K disc (av1.py), made after the remux is on the NAS:
     av1_enabled: bool = True     # make one for every 4K disc; a disc can override it (Job.av1)
     av1_encoder: str = "cpu"     # "cpu" (SVT-AV1) | "gpu" (NVENC)

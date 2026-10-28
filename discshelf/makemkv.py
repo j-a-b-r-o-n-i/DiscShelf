@@ -194,6 +194,74 @@ def _run_info(cfg: Config, args: list[str], run) -> dict:
     return parsed
 
 
+class ScanStopped(RuntimeError):
+    """The scan was stopped from the window."""
+
+
+def _run_info_live(cfg: Config, args: list[str], watch, cancel: threading.Event | None,
+                   popen=subprocess.Popen, ports_of=None, poll: float = 0.25) -> dict:
+    """_run_info, reading MakeMKV's output as it arrives and feeding each line to watch
+    (a scanwatch.ScanWatch). There is no time limit: a 4K disc's first scan can spend many
+    minutes fetching keys while printing nothing, so the window decides when to give up,
+    from watch's stalled flag. cancel stops MakeMKV and raises ScanStopped.
+
+    ports_of(pid) gives makemkvcon's connections to its server (scanwatch.server_ports
+    through find_makemkvcon), or None when the process can't be seen."""
+    from . import scanwatch
+    if ports_of is None:
+        found: dict[int, int | None] = {}
+
+        def ports_of(pid):
+            if found.get(pid) is None:      # looked for again until it appears
+                found[pid] = scanwatch.find_makemkvcon(pid)
+            mk = found[pid]
+            return scanwatch.server_ports(mk) if mk is not None else None
+    cmd = command(cfg) + ["-r", "--cache=1"] + args
+    try:
+        proc = popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+    except FileNotFoundError:
+        raise RuntimeError(f"MakeMKV is not installed, or {cmd[0]!r} is not on the PATH.")
+    lines: list[str] = []
+
+    def read():
+        for ln in proc.stdout:
+            ln = ln.rstrip("\n")
+            lines.append(ln)
+            watch.line(ln)
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    stopped = False
+    blind = False
+    try:
+        while proc.poll() is None:
+            if cancel is not None and cancel.is_set():
+                stopped = True
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                break
+            if not blind:
+                try:
+                    ports = ports_of(proc.pid)
+                except Exception:  # noqa: BLE001 -- only feeds the window's request count
+                    ports = None
+                blind = ports is None and watch.status().elapsed > 5
+                watch.connections(ports)
+            reader.join(timeout=poll)
+        proc.wait()
+    finally:
+        reader.join(timeout=5)
+        watch.finish()
+    if stopped:
+        raise ScanStopped("The scan was stopped.")
+    parsed = parse_robot(lines)
+    parsed["returncode"] = proc.returncode
+    return parsed
+
+
 def list_drives(cfg: Config, run=subprocess.run) -> list[Drive]:
     """Every optical drive MakeMKV can see. Slots with no drive are dropped."""
     # disc:9999 never exists, so MakeMKV lists the drives and then reports
@@ -242,9 +310,16 @@ def scan_disc(cfg: Config, drive_index: int, run=subprocess.run, min_seconds: in
     return scan_disc_parsed(cfg, drive_index, run, min_seconds)[1]
 
 
-def scan_disc_parsed(cfg: Config, drive_index: int, run=subprocess.run, min_seconds: int = 0) -> tuple[dict, Disc]:
-    """scan_disc, also returning parse_robot's output for the Disc info report."""
-    parsed = _run_info(cfg, [f"--minlength={int(min_seconds)}", "info", f"disc:{drive_index}"], run)
+def scan_disc_parsed(cfg: Config, drive_index: int, run=subprocess.run, min_seconds: int = 0, *,
+                     watch=None, cancel: threading.Event | None = None,
+                     popen=subprocess.Popen, ports_of=None) -> tuple[dict, Disc]:
+    """scan_disc, also returning parse_robot's output for the Disc info report. With watch,
+    MakeMKV's output is read as it arrives (see _run_info_live) and run isn't used."""
+    args = [f"--minlength={int(min_seconds)}", "info", f"disc:{drive_index}"]
+    if watch is not None:
+        parsed = _run_info_live(cfg, args, watch, cancel, popen=popen, ports_of=ports_of)
+    else:
+        parsed = _run_info(cfg, args, run)
     if parsed["returncode"] != 0 or (not parsed["tinfo"] and not parsed["cinfo"]):
         raise RuntimeError("MakeMKV could not read the disc: "
                            + _last_message(parsed, f"makemkvcon exited with code {parsed['returncode']}"))

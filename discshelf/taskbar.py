@@ -49,3 +49,30 @@ def _dbus_send(uri: str, props: dict) -> None:
     msg = QDBusMessage.createSignal(_PATH, _IFACE, "Update")
     msg.setArguments([uri, props])    # PySide sends a dict as a{sv}; wrapping values again double-wraps them
     bus.send(msg)
+
+
+def notify(summary: str, body: str = "", icon: str = "media-optical", run=None) -> bool:
+    """A desktop notification, best effort: False when neither gdbus nor notify-send is there.
+
+    QtDBus can't send the uint32 that Notify takes from Python, so this goes through gdbus
+    (part of GLib, in the desktop runtimes and on most hosts) or notify-send."""
+    import shutil
+    import subprocess
+    run = run or (lambda cmd: subprocess.run(cmd, capture_output=True, timeout=5).returncode == 0)
+    if shutil.which("gdbus"):
+        cmd = ["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
+               "--object-path", "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.Notify",
+               _gv("Disc Shelf"), "uint32 0", _gv(icon), _gv(summary), _gv(body), "@as []", "@a{sv} {}", "int32 -1"]
+    elif shutil.which("notify-send"):
+        cmd = ["notify-send", "--app-name=Disc Shelf", f"--icon={icon}", summary, body]
+    else:
+        return False
+    try:
+        return bool(run(cmd))
+    except Exception:  # noqa: BLE001 -- a missing notification is never worth an error
+        return False
+
+
+def _gv(text: str) -> str:
+    """A string in GVariant text form, which gdbus parses its arguments as."""
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
