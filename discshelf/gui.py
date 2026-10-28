@@ -205,6 +205,48 @@ _ACODEC = {"truehd": "Dolby TrueHD", "ac3": "AC-3", "eac3": "E-AC-3", "dtshd-ma"
            "dts-hd ma": "DTS-HD MA", "dts": "DTS", "lpcm": "LPCM", "pcm": "LPCM", "flac": "FLAC", "aac": "AAC"}
 
 
+SECOND_Q = {
+    "tv": "Does this set include a 1080p Blu-ray? Rip it next and it's saved as a second version of the same episodes.",
+    "movie": "Does this film come with a 1080p Blu-ray? Rip it next and it's saved as a second version of the film.",
+}
+
+
+def video_off_reasons(*, scanned: bool, uhd: bool, hdr, dv_in_scan: bool, ripping: bool, locked: bool,
+                      done: bool, keep: str) -> dict[str, str]:
+    """Why each part of the Rip page's Video section doesn't apply to this disc, or "" when it does.
+
+    Keys: "hdr" (keep both / HDR10 only), "convert" (profile 8.1), "av1" (the AV1 version) and
+    "second" (the 1080p second version). "hdr_tip" and "convert_tip" explain a choice that
+    applies but can't be confirmed until the rip is checked. hdr is the HdrInfo read from
+    the ripped file, or None before that; MakeMKV's scan rarely says whether there is
+    Dolby Vision, so until then only a "yes" from the scan is trusted.
+    """
+    if not scanned:
+        msg = "Scan a disc first. The defaults for every disc are in Settings."
+        return {"hdr": msg, "convert": msg, "av1": msg, "second": msg}
+    out = {"hdr": "", "convert": "", "av1": "", "second": ""}
+    if not uhd:
+        out["hdr"] = out["convert"] = "This disc has no 4K video, so it has no HDR10 or Dolby Vision to keep."
+        out["av1"] = "AV1 versions are only made from 4K discs."
+        out["second"] = "Only for 4K discs."
+        return out
+    if hdr is not None and not hdr.dolby_vision:
+        has = "HDR10" if hdr.hdr10 else "SDR video"
+        out["hdr"] = out["convert"] = f"This disc has {has} but no Dolby Vision, so there's nothing to keep or drop."
+    elif ripping:
+        out["hdr"] = out["convert"] = "Can't be changed while the disc rips."
+    elif locked:
+        out["hdr"] = out["convert"] = "This disc is already ripped, so this can't change now."
+    elif keep != "all":
+        out["convert"] = "Only applies when Dolby Vision is kept."
+    if not out["hdr"] and hdr is None and not dv_in_scan:
+        out["hdr_tip"] = out["convert_tip"] = ("Applies only if the disc has Dolby Vision. That is checked once "
+                                               "the rip is done.")
+    if done:
+        out["av1"] = "This disc is finished."
+    return out
+
+
 def video_chip(stream) -> str:
     res = stream.resolution or ""
     m = re.search(r"x(\d+)", res)
@@ -352,6 +394,7 @@ QLabel[step="now"] { border-top: 2px solid @TEXT; color: @TEXT; padding-top: 4px
 QLabel[step="todo"] { border-top: 2px solid @FIELD; color: @MUTED; padding-top: 4px; font-size: 11px; }
 QLabel[num="on"] { color: @ACCENT; font-family: "@MONO"; }
 QLabel[num="off"] { color: @MUTED; font-family: "@MONO"; }
+QLabel[role="small"]:disabled, QLabel[role="soft"]:disabled, QLabel[role="field"]:disabled { color: #6A7178; }
 @CHIPS
 QPushButton { min-height: 42px; padding: 0 16px; border-radius: 8px; border: 1px solid @FIELD; background: transparent; color: @TEXT; }
 QPushButton:hover { background: @RAISED; }
@@ -1699,19 +1742,23 @@ class RipPage(QWidget):
         grp = QButtonGroup(self)
         grp.addButton(self.keep_all)
         grp.addButton(self.keep_hdr10)
-        video.lay.addWidget(Option(self.keep_all, "Keep HDR10 and Dolby Vision in one file",
-                                   "Players without Dolby Vision play the HDR10 version instead. Screens without HDR "
-                                   "get a converted picture from Plex."))
-        video.lay.addWidget(Option(self.keep_hdr10, "Keep HDR10 only", "Drops the Dolby Vision layer."))
+        self.opt_all = Option(self.keep_all, "Keep HDR10 and Dolby Vision in one file",
+                              "Players without Dolby Vision play the HDR10 version instead. Screens without HDR "
+                              "get a converted picture from Plex.")
+        self.opt_hdr10 = Option(self.keep_hdr10, "Keep HDR10 only", "Drops the Dolby Vision layer.")
+        video.lay.addWidget(self.opt_all)
+        video.lay.addWidget(self.opt_hdr10)
         line = QFrame()
         line.setObjectName("rowLine")
         line.setFixedHeight(1)
         video.lay.addWidget(line)
         self.convert = QCheckBox()
-        video.lay.addWidget(Option(self.convert, "Convert Dolby Vision to profile 8.1",
-                                   "For streaming boxes that play profile 8.1 but not disc profile 7. No re-encoding, "
-                                   "but a full enhancement layer is dropped. Default set in Settings."))
-        self.no_uhd = label("This disc has no 4K video, so the HDR choices don't apply to it.", "small", wrap=True)
+        self.opt_convert = Option(self.convert, "Convert Dolby Vision to profile 8.1",
+                                  "For streaming boxes that play profile 8.1 but not disc profile 7. No re-encoding, "
+                                  "but a full enhancement layer is dropped. Default set in Settings.")
+        video.lay.addWidget(self.opt_convert)
+        # Says why the HDR choices are off for this disc, when they are; the same text is their tooltip.
+        self.no_uhd = label("", "small", wrap=True)
         self.no_uhd.hide()
         video.lay.addWidget(self.no_uhd)
         # A smaller AV1 second version (4K discs only); the remux above stays RAW.
@@ -1724,20 +1771,21 @@ class RipPage(QWidget):
                   spacing=16)
         al.setStretch(0, 1)
         self.av1_row.setLayout(al)
-        self.av1_row.hide()
         video.lay.addWidget(self.av1_row)
         self.keep_all.toggled.connect(self.policy_changed)
         self.convert.toggled.connect(self.policy_changed)
         note = QFrame()
         note.setObjectName("note")
-        q = label("Does this set include a 1080p Blu-ray? Rip it next and it's saved as a second version of the same "
-                  "episodes.", "soft", wrap=True)
+        self.second_q = q = label(SECOND_Q["tv"], "soft", wrap=True)
         q.setStyleSheet("font-size: 13px;")
-        note.setLayout(hbox(q, link("Second-version settings", lambda: win.show_page("settings")),
+        self.second_note = note
+        self.second_link = link("Second-version settings", lambda: win.show_page("settings"))
+        note.setLayout(hbox(q, self.second_link,
                             spacing=16, margins=(14, 12, 14, 12)))
         note.layout().setStretch(0, 1)
         video.lay.addWidget(note)
         col.addWidget(video)
+        self.av1_row.show()
 
         # Audio, subtitles, destination
         grid = QGridLayout()
@@ -1977,11 +2025,7 @@ class RipPage(QWidget):
                 self.chip_row.addWidget(label("SDR", "tech"))
             elif self.disc and self.disc.uhd:
                 self.chip_row.addWidget(label("HDR formats are checked after ripping", "small"))
-        uhd = bool(self.disc and self.disc.uhd) or not self.job
-        for w in (self.keep_all, self.keep_hdr10):
-            w.setEnabled(uhd and not self.ripping())
-        self.convert.setEnabled(uhd and self.policy.keep == "all" and not self.ripping())
-        self.no_uhd.setVisible(not uhd)
+        self.fill_video_enabled(self.ripping() or (self.job is not None and self.job.stage != "rip"))
 
     def load_policy(self):
         p = self.policy
@@ -2065,9 +2109,9 @@ class RipPage(QWidget):
     def fill_av1(self):
         """The per-disc AV1 choice: shown for 4K discs, defaulting to Settings."""
         cfg, job = self.win.cfg, self.job
-        show = bool(job and self.disc and self.disc.uhd and hasattr(job, "av1"))
-        self.av1_row.setVisible(show)
-        if not show:
+        if not (job and self.disc and self.disc.uhd and hasattr(job, "av1")):
+            self.av1_combo.clear()
+            self.av1_combo.addItem("Not for this disc", "")
             return
         enc = getattr(cfg, "av1_encoder", "cpu")
         name = {"cpu": "Best quality, on the CPU", "gpu": "Fast, on the GPU"}
@@ -2092,12 +2136,25 @@ class RipPage(QWidget):
                 pass
 
     def fill_video_enabled(self, locked: bool):
-        uhd = bool(self.disc and self.disc.uhd) or not self.job
+        job = self.job
+        t_ = self.first_selected()
+        why = video_off_reasons(
+            scanned=job is not None, uhd=bool(self.disc and self.disc.uhd),
+            hdr=next((f.hdr for f in (job.files if job else []) if f.hdr), None),
+            dv_in_scan=any("dolby vision" in f"{s.name} {s.codec_long}".lower()
+                           for s in (t_.streams if t_ else []) if s.kind == "video"),
+            ripping=self.ripping(), locked=locked, done=job is not None and job.stage == "done",
+            keep=self.policy.keep)
         self.fill_av1()
-        self.av1_combo.setEnabled(not (self.job is not None and self.job.stage in ("done",)))
-        self.keep_all.setEnabled(uhd and not locked)
-        self.keep_hdr10.setEnabled(uhd and not locked)
-        self.convert.setEnabled(uhd and not locked and self.policy.keep == "all")
+        for w, key in ((self.opt_all, "hdr"), (self.opt_hdr10, "hdr"), (self.opt_convert, "convert"),
+                       (self.av1_row, "av1"), (self.second_note, "second")):
+            w.setEnabled(not why[key])
+            w.setToolTip(why[key] or why.get(key + "_tip", ""))
+        self.no_uhd.setText(why["hdr"])
+        self.no_uhd.setVisible(bool(job) and bool(why["hdr"]))
+        self.second_link.setText(f'<a href="#" style="color:{LINK if not why["second"] else "#6A7178"}; '
+                                 f'text-decoration:none">Second-version settings</a>')
+        self.second_q.setText(SECOND_Q["movie" if job is not None and self.win.layout_of(job) == "movie" else "tv"])
 
     # -- actions ------------------------------------------------------------
     def scan(self, auto: bool = False):

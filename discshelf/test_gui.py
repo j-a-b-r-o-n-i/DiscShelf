@@ -139,6 +139,21 @@ def run():
         app.processEvents()
         check(page.hdr.badge.text() == "RAW - No Conversion", f"{type(page).__name__} badge did not flip back")
 
+    # The Video section says why a choice doesn't apply, instead of hiding it.
+    rp = win.rip
+    check(rp.opt_all.isEnabled() and "checked once the rip is done" in rp.opt_all.toolTip(),
+          f"4K disc before ripping: {rp.opt_all.isEnabled()} {rp.opt_all.toolTip()!r}")
+    check(rp.av1_row.isVisibleTo(win) and rp.av1_row.isEnabled(), "the AV1 choice is off for a 4K disc")
+    from discshelf.models import HdrInfo
+    why = gui.video_off_reasons(scanned=True, uhd=True, hdr=HdrInfo(hdr10=True), dv_in_scan=False, ripping=False,
+                                locked=True, done=True, keep="all")
+    check(why["hdr"] == "This disc has HDR10 but no Dolby Vision, so there's nothing to keep or drop."
+          and why["convert"] == why["hdr"] and why["av1"] == "This disc is finished." and not why["second"], f"{why}")
+    why = gui.video_off_reasons(scanned=True, uhd=True, hdr=None, dv_in_scan=True, ripping=False, locked=False,
+                                done=False, keep="hdr10")
+    check(not why["hdr"] and why["convert"] == "Only applies when Dolby Vision is kept." and "hdr_tip" not in why,
+          f"{why}")
+
     # Taking the disc out clears the Rip page; putting another in scans it with no click.
     ctl.remove_disc()
     win.poll_disc()
@@ -148,6 +163,12 @@ def run():
     check(wait(lambda: win.rip.job is not None and not win.busy("scan") and win.disc is not None
                and win.disc.label != "SEVERANCE_S1_D1"), "the new disc was not scanned on its own")
     check(wait(lambda: win.rip.cover.has_cover and win.rip.cover.source == "TVmaze"), "no TVmaze poster for the TV disc")
+    if win.disc is not None and not win.disc.uhd:
+        check(not rp.opt_all.isEnabled() and "no 4K video" in rp.opt_all.toolTip() and rp.no_uhd.isVisibleTo(win),
+              f"1080p disc: {rp.opt_all.isEnabled()} {rp.opt_all.toolTip()!r}")
+        check(rp.av1_row.isVisibleTo(win) and not rp.av1_row.isEnabled()
+              and rp.av1_row.toolTip() == "AV1 versions are only made from 4K discs.", "AV1 row on a 1080p disc")
+        check(not rp.second_note.isEnabled(), "the 1080p second-version note is on for a 1080p disc")
     check(not win.rip.cover.caption.isHidden(), "the TVmaze poster has no caption")
 
     # A disc of 11-minute cartoons: "Hide clips under 5 min" hides only the short clips, never episodes.

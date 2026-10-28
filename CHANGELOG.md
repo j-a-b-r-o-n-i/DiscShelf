@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The Rip page's Video choices that don't apply to the disc in the drive are greyed out, and
+  their tooltip says why: no 4K video, HDR10 with no Dolby Vision once the rip has been
+  checked, the rip is running, or the disc is finished. The AV1 choice and the 1080p
+  second-version note are greyed out the same way instead of hidden, and the note says
+  "film" for films.
 - While a disc scans, the Rip page shows each step with its time, including MakeMKV
   fetching a 4K disc's keys from its server, which took over 5 minutes on a first 4K scan.
   The panel also fills in a guess at the name and the NAS check meanwhile, and can rip a
