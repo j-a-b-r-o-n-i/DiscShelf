@@ -168,7 +168,8 @@ def run():
         check("only French audio" in dtext, f"dub duplicate text: {dtext}")
         aside = L.plan_show(scan, look, Scheme(), {dup_rel: "aside"}, root=root)
         eq({r.src: r.dst for r in aside.renames}[dup_rel], f"{SHOW}/Set aside/{SHOW} - S01E03 (2).mkv", "set aside")
-        eq(aside.extra_files, [(f"{SHOW}/Set aside/.plexignore", "*\n")], "plexignore")
+        eq(aside.extra_files, [(f"{SHOW}/Set aside/.plexignore", "*\n"), (f"{SHOW}/Set aside/.ignore", "")],
+           "ignore files")
         bare = L.plan_show(scan, look, Scheme(episode="code", season_pad=False), root=root)
         eq({r.src: r.dst for r in bare.renames}[f"{s1} - S01E02 - Hospital.mkv"],
            f"{SHOW}/Season 1/{SHOW} - S01E02.mkv", "code-only scheme")
@@ -197,9 +198,9 @@ def run():
         log = L.apply(root, L.moves_of(aside.renames), undo_dir, "test", aside.extra_files)
         after = listing(root)
         check(f"{s1} - S01E01 - Magic Xylophone.en.srt" in after, "the subtitle didn't move")
-        check(f"{SHOW}/Set aside/.plexignore" in after, "no .plexignore")
+        check(f"{SHOW}/Set aside/.plexignore" in after and f"{SHOW}/Set aside/.ignore" in after, "no ignore files")
         check(not os.path.isdir(os.path.join(root, SHOW, "Season 02")), "the emptied season folder is still there")
-        eq(len(after), len(before) + 1, "file count after rename")
+        eq(len(after), len(before) + 2, "file count after rename")
         eq(L.last_log(undo_dir), log, "last log")
         n, skipped = L.undo(log)
         eq(listing(root), before, "undo")
@@ -303,7 +304,7 @@ def run_gui():
                    page.plans[SHOW].named > plan.named), "the rename never finished")
         check("Renamed" in page.apply_note.text(), f"note after rename: {page.apply_note.text()}")
         check(any(f.endswith("S01E20 - Markets - Short cut.mkv") for f in listing(root)), "no second cut of Markets")
-        check(ctl.plex_scans == [("TV Shows", SHOW)], f"Plex scans: {ctl.plex_scans}")
+        check(ctl.server_scans == [("TV Shows", SHOW)], f"Plex scans: {ctl.server_scans}")
         check(page.undo_btn.isEnabled(), "Undo isn't offered")
         page.undo_btn.click()
         check(wait(lambda: not win.busy("library-undo") and SHOW in page.plans

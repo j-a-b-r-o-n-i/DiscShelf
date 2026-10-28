@@ -1,8 +1,9 @@
 """The optional AV1 second version of a 4K disc: encode, set HDR10 metadata, check quality, estimate.
 
 The remux from the disc is always kept unchanged. The AV1 file sits next to it in the
-same Plex folder, so Plex lists the two as versions of one film or episode. Many TV
-boxes (the Nvidia Shield, Apple TVs before 2026) can't decode AV1 and keep playing the remux;
+same folder, so Plex lists the two as versions of one film or episode and Jellyfin lets
+the viewer pick one. Many TV boxes (the Nvidia Shield, Apple TVs before 2026) can't decode
+AV1 and keep playing the remux;
 the AV1 file is for phones, browsers and remote streams. For that reason it carries
 HDR10 only: no Dolby Vision, which AV1 tools don't carry over reliably.
 

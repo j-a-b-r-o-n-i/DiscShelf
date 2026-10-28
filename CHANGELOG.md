@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Jellyfin is supported, and so is having no media server. Settings → Media server picks
+  Plex, Jellyfin or none. Jellyfin uses an API key from Dashboard → API Keys, kept in
+  secrets.json like the Plex token, and is asked to scan just the new folder. With no media
+  server, a disc is done once its files are copied and checked. The `{edition-…}` tag in
+  film names is used only with Plex; otherwise an edition is named as a version
+  (`Aliens (1986) - Special Edition.mkv`), which Jellyfin lists under the one film. A "Set aside" folder now also gets
+  the `.ignore` file Jellyfin reads.
+- "NAS" is now "storage" throughout, because a destination can be any folder this computer
+  can write to: a network share, a USB drive or a local folder. "Copy to NAS" is "Copy to
+  storage", and text about scanning names the chosen server.
+- A film copied while it rips finishes much sooner. When MakeMKV finishes, it changes a few
+  bytes in almost every 64 MB chunk of the file, and each changed chunk was sent to storage
+  again in full, which meant sending most of the film twice. Now only the 1 MB pieces that
+  changed are sent. From the moment MakeMKV finishes, the status and the header say the
+  copy in storage is being checked, instead of still showing the rip at 90%.
+- The HDR badge says RAW, Compressed (Lossless) or Compressed (Lossy). Converting Dolby
+  Vision to profile 8.1 is lossless on a disc with a minimal enhancement layer and lossy on
+  one with a full layer; until a rip shows which, it counts as lossy. When an AV1 version
+  is made, it has its own Compressed (Lossy) badge next to the main file's.
+- The match chip names where a match came from: TheDiscDB, the title card, the case's
+  episode list or the running time. It used to say "Close match" for all of them.
+- Interface text was reviewed throughout. Text describing how the app used to work, internal
+  details such as checksums and tool names, and wording that no longer matched what the app
+  does were removed or rewritten. The two confirmation dialogs name their buttons ("Delete
+  from storage", "Keep the file") instead of Yes and No.
+
 - Titles that play the same film are grouped, and labelled by what only they have
   ("Japanese audio", "Longer cut", "Different order") instead of "Duplicate". A panel
   under the title list compares them and says why one was picked; "Rip … instead" swaps

@@ -332,7 +332,7 @@ def run():
         open(os.path.join(sdir, "Kites and Things (2019) - S01E02 (2).en.srt"), "w").close()
         st = ctl.season_status(second, refresh=True)
         nas = [p for p in st.problems if p.kind == "nas"]
-        check(len(nas) == 1 and nas[0].text == "Two files on the NAS are S01E02 “Puddles”." and not nas[0].titles,
+        check(len(nas) == 1 and nas[0].text == "Two files in storage are S01E02 “Puddles”." and not nas[0].titles,
               f"NAS duplicate from another disc: {[(p.kind, p.text) for p in st.problems]}")
         cell2 = next(c for c in st.cells if c.number == 2)
         check(cell2.state == "duplicate" and cell2.problem == "nas:1:2", f"cell 2: {cell2.state} {cell2.problem}")

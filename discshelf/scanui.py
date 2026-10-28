@@ -56,15 +56,15 @@ def headline(st: ScanStatus) -> str:
 
 def why(st: ScanStatus) -> str:
     if st.stalled:
-        what = "printed nothing and made no request to its server" if st.sees_traffic else "printed nothing"
+        what = ("reported no progress and made no request to its server" if st.sees_traffic
+                else "reported no progress")
         again = " Scanning again picks up the keys already fetched." if st.requests else ""
         return (f"MakeMKV has {what} for {round(st.quiet_s / 60)} min. That usually means the drive or the "
                 f"connection is stuck.{again}")
     if st.getting_keys:
         key_s = next((s.seconds for s in st.steps if s.name.startswith("Getting")), 0.0)
-        return ("4K discs use a newer copy protection, and MakeMKV looks up their keys online, one at a time. "
-                f"That has taken {_minutes(key_s)} so far, and the drive waits meanwhile. The rest of the scan "
-                "is quick once the keys are in.")
+        return (f"MakeMKV looks up the keys for 4K discs online. That has taken {_minutes(key_s)} so far. "
+                "The rest of the scan is quick once it has them.")
     if st.task:
         return f"MakeMKV is reading the disc's titles and tracks. It says: {st.task}."
     return "MakeMKV is reading the disc's titles and tracks."
@@ -233,7 +233,7 @@ class ScanPanel(QFrame):
         rl.setSpacing(6)
         self.req_note = _label("", "small")
         cap = QHBoxLayout()
-        cap.addWidget(_label("Requests to MakeMKV's server, each 10 s", "small"), 1)
+        cap.addWidget(_label("Requests to MakeMKV's server per 10 s", "small"), 1)
         cap.addWidget(self.req_note)
         rl.addLayout(cap)
         self.bars = RequestBars()
@@ -256,13 +256,14 @@ class ScanPanel(QFrame):
         right = QVBoxLayout()
         right.setSpacing(12)
         right.addWidget(_label("While it scans", "h2"))
-        right.addWidget(_label("These need the disc's name, not the drive.", "small", wrap=True))
+        right.addWidget(_label("Disc Shelf works these out from the disc's name, so they don't wait for the scan.", "small", wrap=True))
         self.facts = QGridLayout()
         self.facts.setHorizontalSpacing(14)
         self.facts.setVerticalSpacing(8)
         self.fact_vals: dict[str, QLabel] = {}
-        for r, key in enumerate(("Looks like", "On the NAS", "Films go to", "Shows go to", "HDR", "AV1 version",
+        for r, key in enumerate(("Looks like", "In storage", "Films go to", "Shows go to", "HDR", "AV1 version",
                                  "Languages")):
+            # The keys stay as callers name them; only the caption is shown.
             k = _label(key, "small")
             k.setAlignment(Qt.AlignmentFlag.AlignTop)
             v = _label("", wrap=True)

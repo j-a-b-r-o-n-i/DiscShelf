@@ -1,4 +1,5 @@
-"""Settings, kept in ~/.config/disc-shelf/config.json. The Plex token sits apart in secrets.json (0600)."""
+"""Settings, kept in ~/.config/disc-shelf/config.json. The Plex token and Jellyfin API key sit apart in
+secrets.json (0600)."""
 from __future__ import annotations
 
 import dataclasses
@@ -39,8 +40,8 @@ def adopt_host_data() -> list[str]:
 class Destination:
     kind: str                    # "tv" | "movie" | "anime" | anything the user adds
     label: str                   # shown in the UI, e.g. "TV shows"
-    path: str                    # local path of the NAS folder (a mounted share)
-    library: str = ""            # Plex library to scan afterwards, "" for none
+    path: str                    # the folder on this machine: a mounted share, a USB drive or a local folder
+    library: str = ""            # the media server's library to scan afterwards, "" for none
     layout: str = "tv"           # "tv": Show/Season NN/... | "movie": Title (Year)/...
 
 
@@ -68,7 +69,7 @@ class Config:
     subtitle_langs: list[str] = field(default_factory=lambda: ["eng"])
     hdr: HdrPolicy = field(default_factory=HdrPolicy)    # defaults to RAW: keep everything, convert nothing
     keep_1080p_version: bool = False
-    copy_as_ripped: bool = True  # copy each title to the NAS as soon as it's ripped and its match is ready
+    copy_as_ripped: bool = True  # copy each title to storage as soon as it's ripped and its match is ready
     stream_films: bool = True    # copy a film while it rips (needs RAW HDR and MakeMKV choosing the languages)
     read_title_cards: bool = True    # read each episode's on-screen title card to match it (needs OCR)
     card_search_minutes: int = 5     # how far into a title to look for its card: 2 | 5 | 10 | 20
@@ -82,7 +83,7 @@ class Config:
     eject_after_rip: bool = True     # open the tray once a rip finishes without an error, ready for the next disc
     after_scan: str = "show"         # "show": wait for Rip | "rip_film": rip a film's main title as soon as it's scanned
     notify_scan_done: bool = True    # a desktop notification when a scan finishes and the window isn't in front
-    # The AV1 second version of a 4K disc (av1.py), made after the remux is on the NAS:
+    # The AV1 second version of a 4K disc (av1.py), made after the remux is in storage:
     av1_enabled: bool = True     # make one for every 4K disc; a disc can override it (Job.av1)
     av1_encoder: str = "cpu"     # "cpu" (SVT-AV1) | "gpu" (NVENC)
     av1_quality: int = 2         # 0..4, an index into av1.QUALITY
@@ -90,9 +91,11 @@ class Config:
     av1_check: bool = True       # score it with VMAF before copying; below the threshold it isn't copied
     av1_when: str = "after"      # "after": right after the copy, at low priority | "idle": only while nothing
                                  # rips | "night": only between 01:00 and 07:00 local time
-    cleanup: str = "7days"       # "delete" (once Plex lists every file) | "7days" | "keep"
-    verify: str = "readback"     # "readback": hash the NAS copy through the mount | "size"
+    cleanup: str = "7days"       # "delete" (once copied and checked) | "7days" | "keep"
+    verify: str = "readback"     # "readback": hash the copy in storage through the mount | "size"
+    media_server: str = "plex"   # "plex" | "jellyfin" | "none": which server is asked to scan new rips
     plex_url: str = ""           # e.g. http://192.168.1.20:32400; "" until the setup or Settings fills it in
+    jellyfin_url: str = ""       # e.g. http://192.168.1.20:8096
     dovi_tool: str = "dovi_tool"
     mkvmerge: str = "mkvmerge"
     ffprobe: str = "ffprobe"

@@ -30,6 +30,7 @@ VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".avi", ".ts", ".m2ts", ".mov", ".wmv", ".
 SET_ASIDE = "Set aside"
 # Plex skips every file in a folder holding this, so a set-aside duplicate isn't listed again.
 PLEXIGNORE = (".plexignore", "*\n")
+JFIGNORE = (".ignore", "")       # Jellyfin skips a folder holding an empty .ignore
 FIXES = ("version", "extra", "aside")
 
 # S01E02, s01e02, S01 E02, S01E02-E03, S01E02E03, S01E02-03, S1959E20; 1x02, 1x02-1x03, 1x02-03.
@@ -342,7 +343,7 @@ def _norm_path(p: str) -> str:
 
 
 def readings_from_jobs(jobs: list[Job]) -> dict[str, Reading]:
-    """Normalised NAS path → Reading, for every copied file whose match came from a title card or TheDiscDB."""
+    """Normalised destination path → Reading, for every copied file whose match came from a title card or TheDiscDB."""
     out: dict[str, Reading] = {}
     for job in jobs:
         by = {m.title_index: m for m in job.matches}
@@ -460,7 +461,7 @@ def plan_show(scan: ShowScan, look: Lookup | None, scheme: naming.Scheme | None 
     """What would change in one show folder, and what needs a decision.
 
     The show folder keeps its name unless rename_folder is set, because a new folder name
-    makes Plex match the whole show again and leaves a release folder's other files behind.
+    makes the media server match the whole show again and leaves a release folder's other files behind.
     Its name then starts each file name too, except in a release folder, whose file names
     take the show's name and year from TVmaze. Season folders and file names follow the scheme.
 
@@ -578,8 +579,8 @@ def plan_show(scan: ShowScan, look: Lookup | None, scheme: naming.Scheme | None 
                 targets.append((f, dst, f"A second {e.title}, kept as an extra", "extra"))
             elif fix == "aside":
                 dst = f"{folder}/{SET_ASIDE}/{f.name}"
-                targets.append((f, dst, "Set aside, not deleted. Plex skips this folder", "aside"))
-                plan.extra_files.append((f"{folder}/{SET_ASIDE}/{PLEXIGNORE[0]}", PLEXIGNORE[1]))
+                targets.append((f, dst, "Set aside in its own folder, not deleted", "aside"))
+                plan.extra_files += [(f"{folder}/{SET_ASIDE}/{n}", text) for n, text in (PLEXIGNORE, JFIGNORE)]
             else:
                 dst = naming.episode_relpath(look.name, look.year, season, number, f.end, label, ext, e.title,
                                              end_t, f.quality, scheme, folder, prefix)

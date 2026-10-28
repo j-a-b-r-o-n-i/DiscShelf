@@ -72,8 +72,8 @@ class Problem:
     """Something on the Match page that needs a look.
 
     kind "duplicate": titles of this disc hold an episode another title or file also holds; they
-    are held back until it's settled. kind "nas": every file holding the episode is already on
-    the NAS (another disc's, or this disc's locked titles), so the fix renames files there.
+    are held back until it's settled. kind "nas": every file holding the episode is already in
+    storage (another disc's, or this disc's locked titles), so the fix renames files there.
     kind "check": one title's match is unsure (titles holds it, numbers its episode, if any)."""
     season: int
     numbers: list[int]           # the episodes it covers, more than one for a two-part title
@@ -397,10 +397,10 @@ def find_problems(mine: list[Holder], others: list[Holder], names: dict[tuple[in
 
 def find_nas_duplicates(mine: list[Holder], others: list[Holder], problems: list[Problem],
                         names: dict[tuple[int, int], str] | None = None) -> list[Problem]:
-    """Episodes held by two files already on the NAS with the same version, where no title of this
+    """Episodes held by two files already in storage with the same version, where no title of this
     disc that could still change is involved: another disc's pair (copied before duplicates were
     checked), a pair of this disc's own copied titles, or a library file and a copied title.
-    Such a pair is fixed by renaming files on the NAS. A duplicate problem whose titles here are
+    Such a pair is fixed by renaming files in storage. A duplicate problem whose titles here are
     all copied becomes one of these."""
     names = names or {}
     live = {(p.season, n) for p in problems for n in p.numbers if p.kind == "duplicate"
@@ -423,7 +423,7 @@ def find_nas_duplicates(mine: list[Holder], others: list[Holder], problems: list
 
 def nas_text(p: Problem) -> str:
     n = len(p.sides)
-    return f"{'Two' if n == 2 else n} files on the NAS are {p.episode_text()}."
+    return f"{'Two' if n == 2 else n} files in storage are {p.episode_text()}."
 
 
 def find_checks(job: Job, locked: set[int] = frozenset()) -> list[Problem]:
@@ -467,10 +467,11 @@ def card_agrees(text: str, title: str) -> bool:
 def problem_text(p: Problem) -> str:
     ep = p.episode_text()
     where = _and([o.at() for o in p.others])
+    both = "both" if len(p.titles) == 2 else "all"
     if len(p.titles) > 1 and not p.others:
-        return f"{_titles_text(p.titles)} are both {ep}."
+        return f"{_titles_text(p.titles)} are {both} {ep}."
     if len(p.titles) > 1:
-        return f"{_titles_text(p.titles)} are both {ep}, which is already {where}."
+        return f"{_titles_text(p.titles)} are {both} {ep}, which is already {where}."
     return f"{_titles_text(p.titles)} is {ep}, which is already {where}."
 
 
@@ -628,7 +629,7 @@ def fix_keep(matches: list[Match], keep: int, problem: Problem, locked: set[int]
 
 def fix_version(matches: list[Match], job: Job, ti: int, problem: Problem) -> list[Match]:
     """Keep this title as a second version of the episode: both keep its name, and the file gets
-    " - Short cut" (or " - Version 2") so Plex lists it under Play Version."""
+    " - Short cut" (or " - Version 2") so media servers list it as a second version."""
     out = _copy.deepcopy(matches)
     m = _edit(out, ti)
     if m is not None:
@@ -685,10 +686,10 @@ def compare_hint(job: Job, problem: Problem, cards: dict) -> str:
         if shorter:
             ti = shorter[0]
             longest = max(lengths.values())
-            return (f"Both title cards read “{next(iter(texts.values()))}”, so both are this episode. "
+            return (f"{_both_cards(tis)} read “{next(iter(texts.values()))}”, so {_both(tis)} are this episode. "
                     f"Title {ti} is {longest - lengths[ti]} s shorter, so it's probably a second cut: "
                     "keep it as a second version, or save it as an extra.")
-        return (f"Both title cards read “{next(iter(texts.values()))}”. Watch both to see how they differ, "
+        return (f"{_both_cards(tis)} read “{next(iter(texts.values()))}”. Watch {_both(tis)} to see how they differ, "
                 "or keep one as a second version.")
     if len(tis) > 1 and len(texts) == len(tis):
         names = _and([f"title {ti} reads “{texts[ti]}”" for ti in sorted(tis)])
@@ -696,10 +697,20 @@ def compare_hint(job: Job, problem: Problem, cards: dict) -> str:
     shorter = [ti for ti in tis if is_short_cut(job, ti, problem)]
     tail = ""
     if shorter:
-        tail = f" {_titles_text(shorter)} {'is' if len(shorter) == 1 else 'are'} shorter than the other, a hint it's a second cut or an extra."
+        one = len(shorter) == 1
+        tail = (f" {_titles_text(shorter)} {'is' if one else 'are'} shorter, so {'it' if one else 'they'} may be a "
+                "second cut or an extra.")
     if all(read.get(ti) is not None and read[ti].state in ("read", "none") for ti in tis):
         return "Watch each one to tell them apart." + tail
     return "Watch each one, or read their title cards to see which shows the episode's name." + tail
+
+
+def _both(tis: list[int]) -> str:
+    return "both" if len(tis) == 2 else "all of them"
+
+
+def _both_cards(tis: list[int]) -> str:
+    return "Both title cards" if len(tis) == 2 else f"All {len(tis)} title cards"
 
 
 def _fold(s: str) -> str:
@@ -843,7 +854,7 @@ class SeasonChecks:
 
     def season_problems(self, job: Job, others: list[Holder], problems: list[Problem]) -> list[Problem]:
         """Everything the Match page offers to fix, in order: duplicates that hold titles back, files
-        on the NAS that share an episode, then matches that need a check. Hold job_lock."""
+        in storage that share an episode, then matches that need a check. Hold job_lock."""
         mine = title_holders(job, "here")
         names = self._season_names(job)
         nas = find_nas_duplicates(mine, others, problems, {**self._other_names(job), **names})

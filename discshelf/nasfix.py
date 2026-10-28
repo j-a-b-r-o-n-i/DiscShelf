@@ -1,9 +1,9 @@
-"""Fixing two files on the NAS that hold the same episode, from the Match page.
+"""Fixing two files in storage that hold the same episode, from the Match page.
 
 This is the case a season check finds after the fact: a disc copied before duplicates were
 checked left "Show - S01E20.mkv" and "Show - S01E20 (2).mkv" side by side. One of them (the
 odd one: a dub, a shorter cut, the " (2)" copy) is renamed or deleted, and the job that copied it is told,
-so its records match the NAS and the season check stops flagging it.
+so its records match the files and the season check stops flagging it.
 
 plan() only works out names. The renames themselves go through library.apply(), which moves
 sidecars (subtitles, .nfo) along, never overwrites a file, and writes an undo log;
@@ -17,8 +17,8 @@ import os
 import posixpath
 from dataclasses import dataclass, field
 
-from . import naming
-from .library import PLEXIGNORE, SET_ASIDE
+from . import mediaserver, naming
+from .library import JFIGNORE, PLEXIGNORE, SET_ASIDE
 from .models import Job, Match
 from .season import SHORT_CUT_S, Holder, Problem, lang_name
 
@@ -44,7 +44,7 @@ class Plan:
     changes: list[Change]                    # job records to update (none for a file no job copied)
     extra_files: list[tuple[str, str]] = field(default_factory=list)   # e.g. Set aside/.plexignore
     deletes: list[str] = field(default_factory=list)   # videos to delete, for the delete fix (no undo)
-    scan_folder: str = ""        # the season folder, for Plex to rescan
+    scan_folder: str = ""        # the season folder, for the media server to rescan
     result: str = ""             # one sentence once it's done
 
 
@@ -103,13 +103,13 @@ def options(problem: Problem) -> list[tuple[str, str, str, bool]]:
     label = version_label(odd, kept)
     name = problem.name or problem.code
     first = f"Keep {who_l} as the {dub} version" if dub else f"Keep {who_l} as a second version"
-    out = [("version", first, f"It's renamed with “ - {label}” at the end. Plex shows one {name} and offers both "
-                               "under Play Version.", True),
+    out = [("version", first, f"It's renamed with “ - {label}” at the end, so media servers list it as a second "
+                               f"version of {name}.", True),
            ("extra", f"Move {who_l} to Featurettes", f"It's moved to Featurettes as “{extra_name(name, odd, kept)}”. "
-                                                     "Plex lists it with the show's extras.", False),
-           ("aside", f"Set {who_l} aside", f"It's moved to “{SET_ASIDE}” in the show's folder, which Plex skips. "
+                                                     "Media servers list it with the show's extras.", False),
+           ("aside", f"Set {who_l} aside", f"It's moved into “{SET_ASIDE}” inside the show's folder. "
                                            "Nothing is deleted.", False),
-           ("delete", f"Delete {who_l}", "It's deleted from the NAS, with its subtitles. This can't be undone.",
+           ("delete", f"Delete {who_l}", "It's deleted from storage, with its subtitles. This can't be undone.",
             False)]
     if kept.dest_rel and odd.dest_rel:
         other = describe(kept)
@@ -117,7 +117,7 @@ def options(problem: Problem) -> list[tuple[str, str, str, bool]]:
         swap_label = lang_name(kept.audio[0]) if dub and kept.audio else label
         out.append(("swap", f"{who} is the real {name}",
                     f"The two swap names, and {other_l} becomes the {swap_label} version. Pick this if you want "
-                    f"{who_l} to be the one Plex plays first.", False))
+                    f"{who_l} to be the one that plays first.", False))
     return out
 
 
@@ -163,12 +163,13 @@ def plan(problem: Problem, fix: str, scheme: naming.Scheme | None = None) -> Pla
     if fix == "aside":
         dst = f"{folder}/{SET_ASIDE}/{posixpath.basename(odd.dest_rel)}"
         return Plan(fix, [(odd.dest_rel, dst)],
-                    change(odd, dst, target="skip", note=f"Set aside on the NAS in “{SET_ASIDE}”, which Plex skips."),
-                    extra_files=[(f"{folder}/{SET_ASIDE}/{PLEXIGNORE[0]}", PLEXIGNORE[1])], scan_folder=season_dir,
+                    change(odd, dst, target="skip", note=f"Moved to the “{SET_ASIDE}” folder."),
+                    extra_files=[(f"{folder}/{SET_ASIDE}/{n}", text) for n, text in (PLEXIGNORE, JFIGNORE)],
+                    scan_folder=season_dir,
                     result=f"{who} is set aside in “{folder}/{SET_ASIDE}”.")
     if fix == "delete":
-        return Plan(fix, [], change(odd, "", target="skip", note="Deleted from the NAS."), deletes=[odd.dest_rel],
-                    scan_folder=season_dir, result=f"{who} is deleted from the NAS: “{posixpath.basename(odd.dest_rel)}”.")
+        return Plan(fix, [], change(odd, "", target="skip", note="Deleted from storage."), deletes=[odd.dest_rel],
+                    scan_folder=season_dir, result=f"{who} is deleted from storage: “{posixpath.basename(odd.dest_rel)}”.")
     if fix == "swap":
         dub = dub_language(odd, kept)
         other_label = lang_name(kept.audio[0]) if dub and kept.audio else label
@@ -269,9 +270,9 @@ def listing_for(root: str, moves: list[tuple[str, str]]) -> dict[str, list[str]]
 
 
 class NasFixes:
-    """The controllers' side: rename on the NAS and update the jobs. Each controller supplies
+    """The controllers' side: rename files in storage and update the jobs. Each controller supplies
     cfg, job_lock, jobs(), _save(job), and optionally library_path(dest), library_undo_dir()
-    and plex_scan_folder(library, rel)."""
+    and server_scan_folder(library, rel)."""
 
     def fix_root(self, job: Job) -> str:
         """Where the job's destination is on this computer."""
@@ -300,14 +301,15 @@ class NasFixes:
         return out
 
     def _plex_rescan(self, job: Job, folder: str) -> str:
-        fn = getattr(self, "plex_scan_folder", None)
-        if fn is None or not job.library or not folder:
+        fn = getattr(self, "server_scan_folder", None)
+        name = mediaserver.name(self.cfg)
+        if fn is None or not name or not job.library or not folder:
             return ""
         try:
             fn(job.library, folder)
         except Exception as exc:  # noqa: BLE001 -- the renames are done either way
-            return f" Plex couldn't be asked to rescan: {exc}"
-        return f" Plex was asked to rescan {posixpath.basename(folder)}."
+            return f" {name} couldn't be asked to rescan: {exc}"
+        return f" {name} was asked to rescan {posixpath.basename(folder)}."
 
     def _after_fix(self, job: Job, jobs: dict[str, Job]) -> None:
         """Save the changed jobs, keep the copy-locked matches in step, and look at the season again."""

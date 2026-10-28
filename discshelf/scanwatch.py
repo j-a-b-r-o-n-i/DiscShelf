@@ -144,15 +144,15 @@ class ScanWatch:
                 n = len(reqs)
                 span = (keys_end if keys_end is not None else now) - first_req
                 if keys_end is not None:
-                    state, note = "done", f"{n} requests. The keys are cached, so scanning this disc again is quicker."
+                    state, note = "done", f"MakeMKV sent {n} requests. The keys are saved, so scanning this disc again is quicker."
                 elif stalled:
                     state = "stuck"
-                    note = f"{n} requests, then nothing for {fmt_clock(quiet)}: no output and no server traffic."
+                    note = f"MakeMKV sent {n} requests, then nothing for {fmt_clock(quiet)}: no output and no requests."
                 else:
                     state = "now"
                     rate = n / span if span > 5 else 0
                     every = f", about {rate:.0f} a second" if rate >= 0.95 else ""
-                    note = f"{n} requests so far{every}. The drive is waiting, not reading."
+                    note = f"MakeMKV has sent {n} requests so far{every}. The drive is waiting, not reading."
                 steps.append(ScanStep("Getting this disc's keys from MakeMKV's server", state, span, note))
             read_from = keys_end if keys_end is not None else open_end
             if first_req is not None and keys_end is None:

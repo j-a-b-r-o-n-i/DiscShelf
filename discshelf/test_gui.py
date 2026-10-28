@@ -3,7 +3,7 @@
 Smoke test for the Disc Shelf window, run offscreen with the sample controller.
 
 What matters here: the window builds, every page opens, a scan runs on a worker thread
-and fills the Rip page and Disc info, and the RAW / Not Raw badge follows the
+and fills the Rip page and Disc info, and the RAW / Compressed badge follows the
 "Convert Dolby Vision to profile 8.1" checkbox on both the Rip and Settings pages.
 Then a TV disc is ripped and copied title by title (matched and confirmed during the rip),
 a film is copied while it rips, and the Copying settings are saved.
@@ -129,15 +129,15 @@ def run():
     for page in (win.rip, win.settings):
         page.convert.setChecked(False)
         app.processEvents()
-        check(page.hdr.badge.text() == "RAW - No Conversion", f"{type(page).__name__} badge: {page.hdr.badge.text()}")
+        check(page.hdr.badge.text().endswith("RAW"), f"{type(page).__name__} badge: {page.hdr.badge.text()}")
         check(page.hdr.box.isHidden(), f"{type(page).__name__} shows reasons while RAW")
         page.convert.setChecked(True)
         app.processEvents()
-        check(page.hdr.badge.text() == "Not Raw", f"{type(page).__name__} badge after convert: {page.hdr.badge.text()}")
-        check(not page.hdr.box.isHidden(), f"{type(page).__name__} hides the reasons when Not Raw")
+        check(page.hdr.badge.text().endswith("Compressed (Lossy)"), f"{type(page).__name__} badge after convert: {page.hdr.badge.text()}")
+        check(not page.hdr.box.isHidden(), f"{type(page).__name__} hides the reasons when compressed")
         page.convert.setChecked(False)
         app.processEvents()
-        check(page.hdr.badge.text() == "RAW - No Conversion", f"{type(page).__name__} badge did not flip back")
+        check(page.hdr.badge.text().endswith("RAW"), f"{type(page).__name__} badge did not flip back")
 
     # The Video section says why a choice doesn't apply, instead of hiding it.
     rp = win.rip
@@ -214,7 +214,7 @@ def run():
         for r, m in enumerate(win.match.rows()):
             cell = win.match.prog_cells.get(m.title_index)
             combo = win.match.table.cellWidget(r, 2).findChild(gui.EpisodePicker) if win.match.table.cellWidget(r, 2) else None
-            if cell and cell[0].text() == "On the NAS · checked" and combo is not None and not combo.isEnabled():
+            if cell and cell[0].text() == "In storage · checked" and combo is not None and not combo.isEnabled():
                 return True
         return False
 
@@ -230,7 +230,7 @@ def run():
     g.now, g.samples = 100.0, [Sample(50, "rip", 10e6, 0), Sample(60, "copy", 900e6, 0)]
     check(g._points(Span("read", 1, 40, None)) == [(50, 10.0)], "copy samples drawn as reading speed")
 
-    check(wait(locked_row, 20), "no title showed as on the NAS with its match locked")
+    check(wait(locked_row, 20), "no title showed as in storage with its match locked")
     card = win.rip.queue_cards.get(job.id)
     check(wait(lambda: card is not None and len(card.graph.samples) >= 2 and not card.dual.isHidden()
                and any(s.kind == "read" and s.end is not None for s in card.graph.spans)), "queue card timeline")

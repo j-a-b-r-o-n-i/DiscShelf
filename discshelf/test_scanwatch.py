@@ -67,7 +67,7 @@ def run() -> int:
     st = w.status(now=999.0)
     check(st.finished and st.elapsed == 335.0 and all(s.state == "done" for s in st.steps),
           f"finished: {st.elapsed} {[s.state for s in st.steps]}")
-    check("cached" in st.steps[2].note, st.steps[2].note)
+    check("keys are saved" in st.steps[2].note, st.steps[2].note)
 
     # Stalled: requests stop and nothing is printed for 3 minutes.
     w = scanwatch.ScanWatch(start=0.0, clock=lambda: 0.0)

@@ -18,7 +18,7 @@ This walks through each screen and the decisions Disc Shelf makes for you.
   - There's no time limit. After 3 minutes with no output and no server requests (10
     minutes when the requests can't be seen), the panel asks whether to stop and scan
     again, keep waiting, or eject. Stop scan is there the whole time.
-  - The disc's name gives a guess at the film or show, and the NAS is checked for a folder
+  - The disc's name gives a guess at the film or show, and the destination folder is checked for a folder
     with that name, while MakeMKV works.
   - "When the scan finishes" can rip a film's main title straight away: the one title over
     60 minutes, when there's exactly one. A desktop notification says the disc is ready,
@@ -46,8 +46,12 @@ This walks through each screen and the decisions Disc Shelf makes for you.
 - **Video choices that don't apply are greyed out** with a tooltip saying why: no 4K video,
   no Dolby Vision once the rip has been checked, or the rip is running.
 - **Audio and subtitles** default to English; change the defaults in Settings.
-- **HDR** defaults to RAW, which keeps every HDR format and converts nothing. The "Not Raw"
-  badge lists each setting that would change the HDR from the disc.
+- **HDR** defaults to RAW, which keeps every HDR format and converts nothing. The main
+  file's badge says RAW, Compressed (Lossless) or Compressed (Lossy), and lists each
+  setting that would change the HDR from the disc. Converting Dolby Vision to profile 8.1
+  is lossless on a disc whose enhancement layer is minimal (MEL) and lossy on one with a
+  full layer (FEL); until a rip has shown which, it counts as lossy. Keeping HDR10 only is
+  always lossy. When an AV1 version is made, it gets its own Compressed (Lossy) badge.
 - **The next disc of a season starts filled in.** When a disc's show name (or its label
   before `_S` or `_D`) matches exactly one season in progress, the new disc gets that
   season's show, year, library and the next disc number. Whatever the label itself says
@@ -55,7 +59,7 @@ This walks through each screen and the decisions Disc Shelf makes for you.
 - **After ripping**, mkvmerge keeps only the chosen languages. It matches them by
   language, since MakeMKV's track numbers don't match the disc's. ffprobe reads the HDR
   formats, and on a Dolby Vision profile 7 file dovi_tool works out whether it has a full
-  or minimal enhancement layer. Only a "Not Raw" setting runs dovi_tool to change the file.
+  or minimal enhancement layer. Only a setting that isn't RAW runs dovi_tool to change the file.
 - **Ejecting.** With "Eject the disc when its rip finishes" on (the default), the tray
   opens as soon as MakeMKV is done, while the last titles still copy. A stopped or failed
   rip doesn't eject.
@@ -124,7 +128,7 @@ including a two-part title that overlaps another. It also looks across the seaso
 
 Each title involved is marked "check" with a sentence naming the other ("Title 26 is also
 S01E20 “Markets”."), and it isn't copied, even during a rip, until the problem is settled.
-A title already on the NAS keeps its match.
+A title already copied to storage keeps its match.
 
 **Fixing what's flagged.** Anything marked red or amber on the Match page opens the fix
 panel: a ×2 or ? cell in the season grid, a row's Check or duplicate badge, the line at the
@@ -145,7 +149,7 @@ The fixes depend on what's wrong:
   more than 5 seconds shorter, else " - Version 2"; Plex offers them under Play Version),
   save one as an extra in `Featurettes` as "<episode> (French)" or "<episode> (short
   cut)", skip it, read their title cards first, or pick another episode.
-- **Two files already on the NAS for one episode**, from a disc copied before duplicates
+- **Two files already in storage for one episode**, from a disc copied before duplicates
   were checked (both from another disc of the season, or this disc's own copied titles):
   keep the odd one (a dub, then the shorter, then the " (2)" copy) as the French version or
   a second version, move it to `Featurettes`, set it aside in "<show>/Set aside/" (which
@@ -175,7 +179,7 @@ numbered by the order the season's discs were ripped, and named by its label in 
 ("disc 1, First Half").
 
 **Watch.** The ▶ button on each title opens it in a video player: the ripped file, or its
-checked copy on the NAS once the local file is gone. It's available once the title is
+checked copy in storage once the local file is gone. It's available once the title is
 ripped. When the title card was read, you choose between starting at the card or from the
 beginning. mpv and VLC can start at the card; Celluloid and the desktop's default player
 start from the beginning. Inside the Flatpak, mpv or VLC on the host is started with
@@ -191,8 +195,8 @@ start from the beginning. Inside the Flatpak, mpv or VLC on the host is started 
   as they land. That needs the HDR setting at RAW and MakeMKV choosing the languages
   during the rip, through a per-run profile file; your own MakeMKV settings aren't touched.
 - **Copies are checked.** Copies use rsync, which resumes after a network drop. Each file
-  is read back through the mount and its checksum compared with the original. Then Plex is
-  asked to scan just that folder.
+  is read back through the mount and its checksum compared with the original. Then the
+  media server, if you chose one, is asked to scan just that folder.
 - **Speed and time left** show in the progress text, with graphs on the Rip and Copy
   screens and progress on the task-manager icon.
 - **One MakeMKV run for the whole disc.** Each time MakeMKV starts, it opens the disc
@@ -207,19 +211,23 @@ start from the beginning. Inside the Flatpak, mpv or VLC on the host is started 
 - **The rip timeline** on a disc's card shows each title in turn. Opening the disc is
   drawn as a hatched band with no speed line. The reading speed is averaged over 20 s,
   because MakeMKV writes in 32 MB blocks a few seconds apart. Below it, rows show when each
-  title had its languages kept and when it was copied to the NAS. A title read below 75% of
+  title had its languages kept and when it was copied to storage. A title read below 75% of
   the speed of the titles around it gets a red marker. Click a title for its times.
 - **The time left** is worked out per title from the disc's own titles so far: the average
   time to open the disc, the speed while reading over the last 5 titles, and the sizes
   MakeMKV actually writes, which on Blu-rays are often about half its own estimate. The
   titles still to rip are drawn dashed after "now", up to when the rip should end.
-- **Plex sign-in** uses Plex's PIN flow. The token is stored in
-  `~/.config/disc-shelf/secrets.json`, readable only by you.
+- **The media server** is Plex, Jellyfin or none (Settings → Media server). Plex sign-in
+  uses Plex's PIN flow; Jellyfin uses an API key made under Dashboard → API Keys. The token
+  or key is stored in `~/.config/disc-shelf/secrets.json`, readable only by you. Jellyfin is
+  asked to scan one folder through `POST /Library/Media/Updated`. With no media server, a
+  disc is done once its files are copied and checked, and the Library page can't ask for a
+  rescan.
 
 ## File names
 
-Settings → File names. Every choice is a name Plex reads, because Plex matches an episode
-by the show folder, the season and the `S01E01` code, and ignores the rest of the name.
+Settings → File names. Every choice is a name Plex and Jellyfin read, because both match an
+episode by the show folder, the season and the `S01E01` code, and ignore the rest of the name.
 
 - **Episodes**: `Show (Year)/Season 01/Show (Year) - S01E01 - Episode name.mkv` by default.
   The other choices are the code alone (`… - S01E01.mkv`), or the name followed by the
@@ -233,7 +241,10 @@ by the show folder, the season and the `S01E01` code, and ignores the rest of th
   as one episode and offers both under Play Version.
 - **Films**: `Aliens (1986)/Aliens (1986).mkv`, or with an edition the way Plex reads it,
   `Aliens (1986) {edition-Special Edition}.mkv`, optionally followed by the quality
-  (`[2160p]`). Every edition and version of a film sits in the one folder.
+  (`[2160p]`). The `{edition-…}` tag is Plex's own; Jellyfin would list two tagged files as
+  two films. With Jellyfin, or no media server, an edition is named as a version instead,
+  `Aliens (1986) - Special Edition.mkv`, which Jellyfin lists under the one film.
+  Every edition and version of a film sits in the one folder.
 - **Characters a Windows share can't store** are replaced by default: a colon becomes
   " - ", and `? * " < > |` are removed. Turned off, only `/` is removed.
 
@@ -278,7 +289,7 @@ file-name scheme. Films aren't checked yet.
   left empty. It refuses to start if a new name is already taken by another file.
 - **Undo last rename** puts the old names back. Each rename is logged in
   `~/.local/state/disc-shelf/library-undo/`.
-- **Plex** is asked to rescan the show's folder afterwards when you're signed in. Watched
+- **The media server** is asked to rescan the show's folder afterwards when it's connected. Watched
   status belongs to the episode, so it survives the new names.
 
 ## Queue
@@ -310,9 +321,9 @@ Settings → AV1 versions.
   on an Nvidia graphics card and is fast.
 - **A quality check.** The AV1 copy is scored against the remux on 6 clips with VMAF. A
   file scoring under 93 isn't copied, and the disc shows under "Needs you" with the score.
-- **Where it goes.** It's copied next to the remux as `… - 2160p AV1.mkv`, so Plex lists
-  the two as versions of one film or episode. The remux is never changed and reaches Plex
-  first.
+- **Where it goes.** It's copied next to the remux as `… - 2160p AV1.mkv`, so Plex and
+  Jellyfin list the two as versions of one film or episode. The remux is never changed and
+  reaches the library first.
 - **HDR.** HDR10 is kept in the AV1 copy; Dolby Vision stays in the remux only.
 - **One at a time.** One encode runs at a time, in the order queued. "When to encode" can
   hold encodes back while a disc rips, or until 1 am to 7 am.
@@ -323,7 +334,8 @@ Settings → AV1 versions.
   use them.
 
 Many TV boxes, including the Nvidia Shield and Apple TVs before 2026, can't decode AV1.
-Plex keeps playing them the remux.
+Plex keeps playing them the remux. Jellyfin lists both versions and the viewer picks one
+when they start playing.
 
 ## Disc info
 

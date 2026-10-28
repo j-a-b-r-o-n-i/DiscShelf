@@ -1,4 +1,4 @@
-"""The Disc Shelf window (PySide6): Rip, Match episodes, Copy to NAS, History and Settings.
+"""The Disc Shelf window (PySide6): Rip, Match episodes, Copy to storage, History and Settings.
 
 Only this module imports PySide6, so the rest of Disc Shelf stays headless. Every
 Controller call blocks, so each one runs on a QThread; progress callbacks may come
@@ -43,7 +43,7 @@ except ImportError:                                  # the classifier is optiona
 from .models import Disc, Drive, Episode, HdrPolicy, Job, Match, RippedFile, Sample, Span, Title, TitleProgress
 from .picker import PICKER_STYLE, EpisodePicker
 from . import season as seasonmod
-from . import naming, nasfix, ripstats
+from . import mediaserver, naming, nasfix, ripstats
 from . import timeline as tl
 from .seasonui import (ClickChip, CompareTitle, ComparePanel, FixOption, FixView, ProblemsBanner, SeasonGrid,
                        WatchChooser, watch_button)
@@ -75,7 +75,8 @@ CHIPS = {   # name: (background, text, border or "")
     "info": ("#1E2733", "#A9D1F6", ""),
     "bad": ("#2E1C1C", "#F2A7A7", ""),
     "raw": ("#1F2A22", "#8FE0B0", "#3E6B50"),
-    "notraw": ("#2B2416", "#F5C27A", "#6B5527"),
+    "lossless": ("#1E2733", "#A9D1F6", "#3A5878"),
+    "lossy": ("#2B2416", "#F5C27A", "#6B5527"),
 }
 
 # Chart and progress colours, from the mockups. Series colours are only ever used for marks,
@@ -90,7 +91,7 @@ LANG_NAMES = {"eng": "English", "spa": "Spanish", "fra": "French", "deu": "Germa
               "ita": "Italian", "jpn": "Japanese", "por": "Portuguese", "nld": "Dutch", "kor": "Korean"}
 
 STAGES = ("rip", "match", "copy", "plex")
-STAGE_NAMES = ("Rip", "Match", "Copy", "In Plex")
+STAGE_NAMES = ("Rip", "Match", "Copy", "Copied")    # QueueCard.refresh names the media server in the last
 
 
 # ---------------------------------------------------------------------------
@@ -602,6 +603,15 @@ def clear_layout(lay) -> None:
             clear_layout(it.layout())
 
 
+def confirm(parent: QWidget, title: str, text: str, yes: str, no: str) -> bool:
+    """A question whose buttons name what each one does. The safe choice is the default."""
+    box = QMessageBox(QMessageBox.Icon.Question, title, text, parent=parent)
+    ok = box.addButton(yes, QMessageBox.ButtonRole.AcceptRole)
+    box.setDefaultButton(box.addButton(no, QMessageBox.ButtonRole.RejectRole))
+    box.exec()
+    return box.clickedButton() is ok
+
+
 def field_spin() -> QSpinBox:
     """A number box the same height as the text fields beside it, its value inset like theirs.
     (A spin box's inner line edit ignores the stylesheet's padding, so the margin is set directly.)"""
@@ -611,6 +621,24 @@ def field_spin() -> QSpinBox:
     probe.ensurePolished()
     sb.setFixedHeight(probe.sizeHint().height())
     return sb
+
+
+def server_name(win) -> str:
+    """The media server the settings name: "Plex", "Jellyfin", or "" with none. Text about scanning
+    or a library uses it, and leaves the sentence out when it is ""."""
+    return mediaserver.name(win.cfg)
+
+
+def normal_url(text: str, port: int) -> str:
+    """"192.168.1.20" → "http://192.168.1.20:<port>"; a scheme or port typed in is kept, "" stays ""."""
+    url = text.strip().rstrip("/")
+    if not url:
+        return ""
+    if not re.match(r"^https?://", url):
+        url = "http://" + url
+    if not re.search(r":\d+$", url.split("//", 1)[1]):
+        url += f":{port}"
+    return url
 
 
 def field(caption: str, widget: QWidget) -> QWidget:
@@ -668,7 +696,7 @@ class ChoiceCard(QFrame):
     """A large radio choice: a title, a small mono line and a description, picked by clicking anywhere on it."""
     picked = Signal(str)
 
-    def __init__(self, key: str, title: str, tech: str, desc: str):
+    def __init__(self, key: str, title: str, tech: str, desc: str, min_height: int = 128):
         super().__init__()
         self.key = key
         self.setObjectName("choiceCard")
@@ -676,10 +704,10 @@ class ChoiceCard(QFrame):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName(title)
         self.setAccessibleDescription(desc)
-        self.setLayout(vbox(label(title, "h3"), label(tech, "field", mono=True), label(desc, "small", wrap=True),
-                            spacing=4, margins=(14, 12, 14, 12)))
+        parts = [label(title, "h3")] + ([label(tech, "field", mono=True)] if tech else [])
+        self.setLayout(vbox(*parts, label(desc, "small", wrap=True), None, spacing=4, margins=(14, 12, 14, 12)))
         # A word-wrapped label in a grid doesn't ask for its wrapped height, so leave room for 3 lines.
-        self.setMinimumHeight(128)
+        self.setMinimumHeight(min_height)
         self.set_checked(False)
 
     def set_checked(self, on: bool) -> None:
@@ -860,12 +888,23 @@ class NavButton(QPushButton):
         self.text_label.setStyleSheet(f"color: {TEXT}; font-weight: 600;" if on else f"color: {SOFT};")
 
 
+BADGES = {"raw": "RAW", "lossless": "Compressed (Lossless)", "lossy": "Compressed (Lossy)"}
+
+
 class HdrStatus:
-    """The RAW - No Conversion / Not Raw badge and the box listing why."""
+    """The main file's RAW / Compressed badge, the AV1 version's badge beside it, and the box
+    listing what changes the main file."""
 
     def __init__(self):
-        self.badge = chip("RAW - No Conversion", "raw")
-        self.badge.setAccessibleDescription("HDR status")
+        self.badge = chip(BADGES["raw"], "raw")
+        self.badge.setAccessibleDescription("Main file")
+        self.badge.setToolTip("The main file, compared with the disc")
+        self.av1_badge = chip(f"AV1 version · {BADGES['lossy']}", "lossy")
+        self.av1_badge.setAccessibleDescription("AV1 version")
+        self.av1_badge.setToolTip("The AV1 version is re-encoded, so it is always lossy. The main file is kept too.")
+        self.av1_badge.hide()
+        self.badges = QWidget()
+        self.badges.setLayout(hbox(self.badge, self.av1_badge, spacing=8))
         self.box = QFrame()
         self.box.setObjectName("reasons")
         self.box_lay = vbox(label("Settings that change the HDR from the disc", "reasonhead"), spacing=6,
@@ -873,12 +912,14 @@ class HdrStatus:
         self.box.setLayout(self.box_lay)
         self.box.hide()
 
-    def update(self, policy: HdrPolicy) -> None:
-        reasons = policy.raw_reasons()
-        if reasons:
-            set_chip(self.badge, "Not Raw", "notraw")
-        else:
-            set_chip(self.badge, "RAW - No Conversion", "raw")
+    def update(self, policy: HdrPolicy, layer_kind: str | None = None, av1: bool | None = None) -> None:
+        """av1: whether an AV1 version is made; None leaves its badge as it is."""
+        reasons = policy.raw_reasons(layer_kind)
+        kind = policy.compression(layer_kind)
+        if av1 is not None:
+            self.av1_badge.setVisible(av1)
+        two = not self.av1_badge.isHidden()
+        set_chip(self.badge, f"Main file · {BADGES[kind]}" if two else BADGES[kind], kind)
         while self.box_lay.count() > 1:
             it = self.box_lay.takeAt(1)
             it.widget().deleteLater()
@@ -1400,11 +1441,11 @@ class QueueCard(Card):
         on_nas = any(f.state == "verified" for f in job.files)
         m.addAction("Open matches", lambda: win.open_match(job))
         if hasattr(ctl, "nas_folder") and on_nas:
-            m.addAction("Show the files on the NAS", lambda: win.open_folder(ctl.nas_folder(job)))
+            m.addAction("Show the files in storage", lambda: win.open_folder(ctl.nas_folder(job)))
         if hasattr(ctl, "reverify") and on_nas:
-            m.addAction("Check the NAS copies again", lambda: win.reverify(job))
+            m.addAction("Check the copies in storage again", lambda: win.reverify(job))
         if hasattr(ctl, "free_local") and on_nas:
-            m.addAction("Delete the local rip of titles on the NAS", lambda: win.queue.free_local(job))
+            m.addAction("Delete the local copy of titles already in storage", lambda: win.queue.free_local(job))
         if win.is_running(job):
             m.addSeparator()
             m.addAction("Stop rip" if win.is_ripping(job) else "Stop copy", lambda: win.stop(job))
@@ -1434,6 +1475,8 @@ class QueueCard(Card):
             else:
                 state = "done" if i < idx else ("now" if i == idx else "todo")
             set_prop(lab, "step", state)
+        server = server_name(win)
+        self.steps[3].setText(f"In {server}" if server else "Copied")
         running = win.is_running(job)
         if job.stage == "done":
             frac = 1.0
@@ -1456,11 +1499,11 @@ class QueueCard(Card):
         if waiting or job.stage == "match":
             act = "Match episodes"
         elif overlap:
-            act = "Show copy"
+            act = "Show copy progress"
         elif job.stage == "copy":
-            act = "Show copy" if running else "Resume copy"
+            act = "Show copy progress" if running else "Resume copy"
         elif job.stage == "plex":
-            act = "Show copy"
+            act = "Show copy progress"
         self.action.setText(act)
         self.action.setVisible(bool(act))
         self.action.setEnabled(not (act == "Resume copy" and win.busy("copy")))
@@ -1478,7 +1521,7 @@ class QueueCard(Card):
         self.rip_rate.setText(f"{fmt_rate(rate)}" if rate else "")
         self.rip_bar.setValue(int(sum(p.ripped_bytes for p in live) / total * 1000))
         on_nas = sum(1 for p in live if p.state == "verified")
-        text = f"Copy · {on_nas} of {len(live)} on the NAS"
+        text = f"Copy · {on_nas} of {len(live)} in storage"
         copying = next((k for k, p in enumerate(live) if p.state in ("copying", "checking")
                         or (p.state == "ripping" and p.copied_bytes)), None)
         if copying is not None:
@@ -1620,7 +1663,7 @@ def main_film(titles: list[Title]) -> Title | None:
 
 def nas_has(name: str, dests: list[tuple[str, str]]) -> str:
     """Whether a destination already has a folder for this film or show, in one sentence.
-    Runs on a worker: listing a NAS share can hang while it reconnects."""
+    Runs on a worker: listing a network share can hang while it reconnects."""
     want = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
     found, missing = [], []
     for label_, path in dests:
@@ -1636,8 +1679,8 @@ def nas_has(name: str, dests: list[tuple[str, str]]) -> str:
     if found:
         return ". ".join(found) + "."
     if missing and len(missing) == len(dests):
-        return "The NAS isn't reachable right now."
-    return "Not on the NAS yet."
+        return "The storage folders can't be reached right now."
+    return "Not in storage yet."
 
 
 class RipPage(QWidget):
@@ -1744,7 +1787,7 @@ class RipPage(QWidget):
         video.lay.addWidget(label("Video", "h2"))
         self.chip_row = hbox(spacing=8)
         self.hdr = HdrStatus()
-        vrow = hbox(label("On this disc", "small"), 4, self.chip_row, None, self.hdr.badge, spacing=8)
+        vrow = hbox(label("On this disc", "small"), 4, self.chip_row, None, self.hdr.badges, spacing=8)
         video.lay.addLayout(vrow)
         video.lay.addWidget(self.hdr.box)
         self.keep_all = QRadioButton()
@@ -1754,7 +1797,7 @@ class RipPage(QWidget):
         grp.addButton(self.keep_hdr10)
         self.opt_all = Option(self.keep_all, "Keep HDR10 and Dolby Vision in one file",
                               "Players without Dolby Vision play the HDR10 version instead. Screens without HDR "
-                              "get a converted picture from Plex.")
+                              "need the media server or player to convert the picture.")
         self.opt_hdr10 = Option(self.keep_hdr10, "Keep HDR10 only", "Drops the Dolby Vision layer.")
         video.lay.addWidget(self.opt_all)
         video.lay.addWidget(self.opt_hdr10)
@@ -1764,8 +1807,9 @@ class RipPage(QWidget):
         video.lay.addWidget(line)
         self.convert = QCheckBox()
         self.opt_convert = Option(self.convert, "Convert Dolby Vision to profile 8.1",
-                                  "For streaming boxes that play profile 8.1 but not disc profile 7. No re-encoding, "
-                                  "but a full enhancement layer is dropped. Default set in Settings.")
+                                  "For streaming boxes that play profile 8.1 but not the disc's profile 7. The video isn't "
+                                  "re-encoded, but a full enhancement layer is dropped if the disc has one. The "
+                                  "default is in Settings.")
         video.lay.addWidget(self.opt_convert)
         # Says why the HDR choices are off for this disc, when they are; the same text is their tooltip.
         self.no_uhd = label("", "small", wrap=True)
@@ -1776,8 +1820,8 @@ class RipPage(QWidget):
         self.av1_combo.setMinimumWidth(300)
         self.av1_combo.activated.connect(self.av1_picked)
         self.av1_row = QWidget()
-        al = hbox(label("The remux stays exactly as on the disc. The AV1 version is a separate re-encode and doesn't "
-                        "change the badge.", "small", wrap=True), field("AV1 version for this disc", self.av1_combo),
+        al = hbox(label("The AV1 version is a separate, re-encoded copy. The main file follows the HDR "
+                        "choices above.", "small", wrap=True), field("AV1 version for this disc", self.av1_combo),
                   spacing=16)
         al.setStretch(0, 1)
         self.av1_row.setLayout(al)
@@ -1822,7 +1866,7 @@ class RipPage(QWidget):
             c.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             c.setMinimumContentsLength(10)
         dest.lay.addWidget(field("Media type", self.kind_combo))
-        dest.lay.addWidget(field("NAS folder", self.dest_combo))
+        dest.lay.addWidget(field("Folder", self.dest_combo))
         dest.lay.addStretch(1)
         grid.addWidget(self.audio_card, 0, 0)
         grid.addWidget(self.subs_card, 0, 1)
@@ -1830,8 +1874,8 @@ class RipPage(QWidget):
         for c in range(3):
             grid.setColumnStretch(c, 1)
         col.addLayout(grid)
-        col.addWidget(label("Video is copied as-is, with no re-encoding. Plex converts it on the NAS when a device "
-                            "needs it.", "small", wrap=True))
+        self.video_note = label("", "small", wrap=True)     # names the media server; set in update_stream_note
+        col.addWidget(self.video_note)
         col.addStretch(1)
 
         # Queue column
@@ -1896,7 +1940,7 @@ class RipPage(QWidget):
             return
         path = self.dest_combo.currentData()
         if path is None:
-            path = QFileDialog.getExistingDirectory(self, "Choose the NAS folder to copy to",
+            path = QFileDialog.getExistingDirectory(self, "Choose the folder to copy to",
                                                     self.job.destination or "/mnt")
             if not path:
                 self.sync_destination()
@@ -1950,6 +1994,9 @@ class RipPage(QWidget):
 
     def update_stream_note(self):
         job, win = self.job, self.win
+        server = server_name(win)      # here because settings_saved calls this after the server changes
+        self.video_note.setText("The main file's video is copied as-is, with no re-encoding."
+                                + (f" {server} converts it when a device needs it." if server else ""))
         show = bool(job) and job.stage == "rip" and not self.ripping() and win.layout_of(job) == "movie" \
             and win.cfg.stream_films
         why = ""
@@ -2079,14 +2126,23 @@ class RipPage(QWidget):
         self.convert.setChecked(p.convert_p81)
         for w in (self.keep_all, self.keep_hdr10, self.convert):
             w.blockSignals(False)
-        self.hdr.update(p)
+        self.update_badge()
+
+    def update_badge(self):
+        """The main file's badge uses the disc's Dolby Vision layer once a rip has found it."""
+        job = self.job
+        layer = next((f.hdr.dv_layer_kind for f in (job.files if job else []) if f.hdr and f.hdr.dv_layer_kind),
+                     None)
+        av1 = bool(job and self.disc and self.disc.uhd and hasattr(job, "av1") and (
+            job.av1 in ("cpu", "gpu") or (job.av1 == "" and getattr(self.win.cfg, "av1_enabled", False))))
+        self.hdr.update(self.policy, layer, av1)
 
     def policy_changed(self, *_):
         p = self.policy
         p.keep = "all" if self.keep_all.isChecked() else "hdr10"
         p.convert_p81 = self.convert.isChecked()
         self.convert.setEnabled(p.keep == "all" and self.keep_all.isEnabled())
-        self.hdr.update(p)
+        self.update_badge()
         self.update_stream_note()
 
     def fill_streams(self):
@@ -2169,10 +2225,12 @@ class RipPage(QWidget):
             self.av1_combo.addItem(f"Make one · {name[enc]}", enc)
             self.av1_combo.addItem(f"Make one · {name[other]}", other)
         self.av1_combo.setCurrentIndex(max(0, self.av1_combo.findData(job.av1)))
+        self.update_badge()
 
     def av1_picked(self, _i: int):
         if self.job is not None and hasattr(self.job, "av1"):
             self.job.av1 = self.av1_combo.currentData() or ""
+            self.update_badge()
             try:
                 self.win.ctl.save_job(self.job)
             except Exception:  # noqa: BLE001 -- a job that isn't saved yet takes the choice when it is
@@ -2240,7 +2298,7 @@ class RipPage(QWidget):
             self.disc_title.setText(name or label_ or "Scanning the disc")
             self.disc_sum.setText("Scanning. The titles appear here when it finishes.")
         panel = self.scan_panel
-        panel.set_fact("Looks like", f"{name}, guessed from the disc's name" if name else "No name on the disc yet")
+        panel.set_fact("Looks like", f"{name}, guessed from the disc's name" if name else "Not known from the disc's name")
         for key, kind in (("Films go to", "movie"), ("Shows go to", "tv")):
             d = cfg.destination(kind)
             panel.set_fact(key, f"{d.label} · {d.path}" if d else "Not set up in Settings")
@@ -2253,11 +2311,11 @@ class RipPage(QWidget):
             panel.set_fact("AV1 version", "Off in Settings")
         names = lambda codes: ", ".join(LANG_NAMES.get(c, c) for c in codes) or "None"   # noqa: E731
         panel.set_fact("Languages", f"Audio: {names(cfg.audio_langs)}. Subtitles: {names(cfg.subtitle_langs)}.")
-        panel.set_fact("On the NAS", "Checking…" if name else "Checked once the disc has a name")
+        panel.set_fact("In storage", "Checking…" if name else "Checked once the disc has a name")
         if name:
             dests = [(d.label, d.path) for d in cfg.destinations]
             win.run_task(f"nascheck:{label_}", lambda _p: nas_has(name, dests),
-                         ok=lambda text: self.scan_panel.set_fact("On the NAS", text), quiet=True)
+                         ok=lambda text: self.scan_panel.set_fact("In storage", text), quiet=True)
         self.scan_timer.start()
         self.tick_scan()
 
@@ -2376,12 +2434,12 @@ class ExtraDialog(QDialog):
         self.folder.addItems(list(EXTRAS_FOLDERS))
         self.folder.setCurrentText(folder if folder in EXTRAS_FOLDERS else "Featurettes")
         buttons = QDialogButtonBox()
-        ok = buttons.addButton("Save as extra", QDialogButtonBox.ButtonRole.AcceptRole)
+        ok = buttons.addButton("Save as an extra", QDialogButtonBox.ButtonRole.AcceptRole)
         ok.setProperty("primary", "true")
         buttons.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        self.setLayout(vbox(field("Name of the extra", self.name), field("Plex extras folder", self.folder),
+        self.setLayout(vbox(field("Name of the extra", self.name), field("Extras folder", self.folder),
                             buttons, spacing=14, margins=(20, 20, 20, 20)))
         self.setMinimumWidth(380)
 
@@ -2478,7 +2536,8 @@ class MatchPage(QWidget):
 
         self.meta = label("", "meta")
         self.h1 = label("Match titles to episodes", "h1")
-        self.sub = label("Discs often store episodes out of order, so each title is matched by its running time.",
+        self.sub = label("Discs often store episodes out of order, so each title is matched by its title card, TheDiscDB or the "
+                         "episode list from the case, and by running time when none of those knows it.",
                          "muted", wrap=True)
         col.addLayout(vbox(self.meta, self.h1, self.sub, spacing=6))
 
@@ -2554,7 +2613,7 @@ class MatchPage(QWidget):
                            self.dest_field, None, spacing=12)
         col.addLayout(self.fields)
 
-        # While the disc rips: how the titles get to the NAS.
+        # While the disc rips: how the titles get to storage.
         self.banner = QFrame()
         self.banner.setObjectName("banner")
         self.banner.setStyleSheet("QFrame#banner { background: #15202B; border: 1px solid #2E4A63; border-radius: 10px; }")
@@ -2633,7 +2692,7 @@ class MatchPage(QWidget):
         # Preview
         prev = Card(spacing=10)
         self.prev_note = label("", "small", wrap=True)
-        ph = hbox(label("Files Plex will see", "h2"), self.prev_note, spacing=16)
+        ph = hbox(label("Files in storage", "h2"), self.prev_note, spacing=16)
         ph.setStretch(1, 1)
         prev.lay.addLayout(ph)
         self.paths = label("", "paths")
@@ -2784,12 +2843,14 @@ class MatchPage(QWidget):
             self.sub.setText("Running times come from the scan, so you can match while the disc rips.")
         else:
             self.sub.setText("Pick which title is the film. Anything else you keep is saved as an extra." if film else
-                             "Discs often store episodes out of order, so each title is matched by its running time.")
+                             "Discs often store episodes out of order, so each title is matched by its title card, "
+                             "TheDiscDB or the episode list from the case, and by running time when none of those "
+                             "knows it.")
         mode = self.copy_mode()
         self.banner_text.setText({
-            "per_title": "Each title goes to the NAS as soon as it's ripped and matched. A title that's already on "
-                         "the NAS keeps its match.",
-            "stream": "The film goes to the NAS while it rips. Its match is locked once the copy starts.",
+            "per_title": "Each title is copied to storage as soon as it's ripped and matched. A title already "
+                         "in storage keeps its match.",
+            "stream": "The film is copied to storage while it rips. Its match is locked once the copy starts.",
             "after": "The titles are copied after the rip ends, once you confirm the matches.",
         }.get(mode, ""))
         self.banner.setVisible(job.stage == "rip" and bool(mode))
@@ -2825,10 +2886,10 @@ class MatchPage(QWidget):
         elif m.target == "extra":
             c = ClickChip("Extra", "plain")
         else:
-            c = ClickChip("Close match", "good")
+            c = ClickChip(self.SOURCE_CHIPS.get(m.source, "Matched"), "good")
         flagged = bool(dup) or unsure
         c.clicked.connect(lambda ti=m.title_index: self.open_fix_for_title(ti))
-        c.setAccessibleName(f"Title {m.title_index}: {c.text()}. " + ("Opens the fix." if flagged else "Opens what's known."))
+        c.setAccessibleName(f"Title {m.title_index}: {c.text()}. " + ("Shows how to fix it." if flagged else "Shows what's known about it."))
         if m.confidence == "check" and m.confirmed and m.target != "skip" and not dup:
             set_chip(c, "Confirmed", "good")
         if m.version and m.target == "episode" and not dup:
@@ -2920,8 +2981,8 @@ class MatchPage(QWidget):
                 el.addWidget(dup)
                 combo.setProperty("warn", "true")
             if locked:
-                el.addWidget(label("Already on the NAS, so the match is locked.", "field"))
-                combo.setToolTip("Already on the NAS, so the match is locked.")
+                el.addWidget(label("Already in storage, so the match is locked.", "field"))
+                combo.setToolTip("Already in storage, so the match is locked.")
             ep_cell.setLayout(el)
             t.setCellWidget(r, 2, ep_cell)
             listed = f"{m.episode.runtime_min} min" if m.target == "episode" and m.episode and m.episode.runtime_min else "—"
@@ -2971,12 +3032,12 @@ class MatchPage(QWidget):
         if p.state == "copying":
             pct = p.copied_bytes / tot
             extra = f" · {fmt_rate(p.copy_rate, 0)}" if p.copy_rate else ""
-            return f"Copying to the NAS · {int(pct * 100)}%{extra}", COPY_TEXT, COPY_BAR, pct
+            return f"Copying to storage · {int(pct * 100)}%{extra}", COPY_TEXT, COPY_BAR, pct
         if p.state == "checking":
             pct = p.checked_bytes / tot
-            return f"Checking the NAS copy · {int(pct * 100)}%", COPY_TEXT, COPY_BAR, pct
+            return f"Checking the copy · {int(pct * 100)}%", COPY_TEXT, COPY_BAR, pct
         if p.state == "verified":
-            return "On the NAS · checked", DONE_TEXT, DONE_BAR, 1.0
+            return "In storage · checked", DONE_TEXT, DONE_BAR, 1.0
         if p.state == "waiting_match":
             return "Ripped · waits for your check", RIP_TEXT, ACCENT, 1.0
         if p.state == "ripped":
@@ -3022,14 +3083,22 @@ class MatchPage(QWidget):
         before = " before it's copied" if job.stage == "rip" and self.copy_mode() in OVERLAP else ""
         self.decisions.setText(f"{n_check} need a decision{before}" if n_check > 1 else
                                (f"1 needs a decision{before}" if n_check == 1 else ""))
-        dest = job.destination or "the NAS"
-        lib = job.library
+        dest = job.destination or "storage"
+        lib, server = job.library, server_name(self.win)
         if job.stage == "rip" and self.copy_mode() in OVERLAP:
-            self.prev_note.setText(f"On the NAS share {dest}, scanned into the {lib} library as each one lands" if lib
-                                   else f"On the NAS share {dest}. Plex isn't asked to scan it.")
+            if server and lib:
+                note = f"In {dest}, scanned into the {lib} library in {server} as each one is copied"
+            elif server:
+                note = f"In {dest}. {server} isn't asked to scan it."
+            else:
+                note = f"In {dest}, as each one is copied"
+        elif server and lib:
+            note = f"Copied to {dest}, then scanned into the {lib} library in {server}"
+        elif server:
+            note = f"Copied to {dest}. {server} isn't asked to scan it."
         else:
-            self.prev_note.setText(f"Copied to the NAS share {dest}, then scanned into the {lib} library" if lib else
-                                   f"Copied to the NAS share {dest}. Plex isn't asked to scan it.")
+            note = f"Copied to {dest}"
+        self.prev_note.setText(note)
         self.plan, self.plan_error = [], ""
         if job.matches and job.stage != "rip":
             try:
@@ -3061,7 +3130,7 @@ class MatchPage(QWidget):
                 p, m = prog.get(idx), by.get(idx)
                 state = ""
                 if p is not None and p.state == "verified":
-                    state = "on the NAS"
+                    state = "in storage"
                 elif p is not None and p.state in ("copying", "checking"):
                     state = "copying"
                 elif m is not None and m.confidence == "check" and not m.confirmed and m.target != "skip":
@@ -3092,7 +3161,7 @@ class MatchPage(QWidget):
             self.confirm_btn.setToolTip("")
             if not self.saved.property("pinned"):
                 if self.copy_mode() in OVERLAP:
-                    self.saved.setText("Nothing else to do here: the rest copies as each title finishes ripping.")
+                    self.saved.setText("Nothing else to do here. Each title is copied as it finishes ripping.")
                 else:
                     self.saved.setText("The titles are copied once the rip ends and you confirm the matches.")
         else:
@@ -3255,7 +3324,7 @@ class MatchPage(QWidget):
         job = self.job
         path = self.dest.currentData()
         if path is None:
-            path = QFileDialog.getExistingDirectory(self, "Choose the NAS folder to copy to", job.destination or "/mnt")
+            path = QFileDialog.getExistingDirectory(self, "Choose the folder to copy to", job.destination or "/mnt")
             if not path:
                 self.fill_dest()
                 return
@@ -3446,8 +3515,7 @@ class MatchPage(QWidget):
                 secs = int(sum(took) / len(took) * (waiting + reading) / max(1, reading or 1))
                 left = (f"about {secs // 60} min {secs % 60:02d} s left · " if secs >= 60 else
                         f"about {secs} s left · " if secs >= 5 else "a few seconds left · ")
-            self.cards_sub.setText(f"{left}{reading} at a time. Each title is read with OCR up to its card, "
-                                   "and matches update as each card is read.")
+            self.cards_sub.setText(f"{left}{plural(reading, 'title')} at a time. Matches update as each card is read.")
             self.win.cards_progress = (done, n)
         elif stopped:
             self.cards_title.setText(f"Stopped after {done - stopped} of {n} titles")
@@ -3540,7 +3608,7 @@ class MatchPage(QWidget):
     @staticmethod
     def banner_phrase(p) -> str:
         if p.kind == "nas":
-            return f"{p.episode_text()} is on {len(p.sides)} files on the NAS"
+            return f"{p.episode_text()} has {len(p.sides)} files in storage"
         return p.text.rstrip(".")
 
     def fill_problems(self):
@@ -3680,7 +3748,7 @@ class MatchPage(QWidget):
         else:
             rows.append(("Title card", "No episode name was found on screen", "#F5C27A"))
         if ti in self._locked:
-            now = f"On the NAS as {os.path.basename(f.dest_rel)}" if f and f.dest_rel else "On the NAS"
+            now = f"In storage as {os.path.basename(f.dest_rel)}" if f and f.dest_rel else "In storage"
         elif f is not None:
             now = "Ripped. It waits until this is settled." if m and m.held else "Ripped, not copied yet"
         else:
@@ -3712,7 +3780,7 @@ class MatchPage(QWidget):
         if h.audio:
             words = " and ".join(seasonmod.lang_name(c) for c in h.audio)
             rows.append(("Audio", f"{words} only" if dub else words, "#F5C27A" if dub else ""))
-        rows.append(("Now", "On the NAS" if h.on_nas else "Ripped, not copied yet", ""))
+        rows.append(("Now", "In storage" if h.on_nas else "Ripped, not copied yet", ""))
         label = nasfix.describe(h) if h.where != "library" else "A file in the library"
         sub = os.path.basename(h.dest_rel) if h.dest_rel else (h.name or h.source)
         return CompareTitle(key=f"side:{i}", title_index=None, label=label, sub=sub, rows=rows, path=h.path,
@@ -3786,10 +3854,12 @@ class MatchPage(QWidget):
             k = keepers[0]
             opts.append(FixOption("keep", f"Title {k} is {name}", f"Title {k} keeps it, and title {odd} is skipped "
                                   "until you pick its episode.", f"Keep title {k}"))
+        picks = {"Plex": " Plex offers both under Play Version.",
+                 "Jellyfin": " Jellyfin lists both, and the viewer picks one when playing."}.get(server_name(self.win), "")
         opts.append(FixOption("version", f"Keep title {odd} as the {dub} version" if dub else
                               f"Keep title {odd} as a second version",
-                              f"Both keep {name}, and title {odd}'s file gets “ - {label}” at the end of its name. "
-                              "Plex offers both under Play Version.", "Keep both"))
+                              f"Both keep {name}, and title {odd}'s file gets “ - {label}” at the end of its name."
+                              + picks, "Keep both"))
         opts.append(FixOption("extra", f"Save title {odd} as an extra",
                               f"It's copied to Featurettes as “{seasonmod.extra_name(job, odd, p)}”.", "Save as an extra"))
         opts.append(FixOption("skip", f"Skip title {odd}", "It isn't copied, and the other keeps the episode.",
@@ -3839,11 +3909,11 @@ class MatchPage(QWidget):
         discs = {h.disc for h in p.sides if h.where == "disc"}
         name = p.name or p.code
         if all(h.where == "disc" for h in p.sides) and len(discs) == 1:
-            came = f"Both came from {next(iter(discs))}, and were copied before duplicates were checked."
+            came = f"Both came from {next(iter(discs))} and are already in storage."
         elif all(h.where == "here" for h in p.sides):
-            came = "Both came from this disc and are already on the NAS, so their matches are locked."
+            came = "Both came from this disc and are already in storage, so their matches are locked."
         else:
-            came = "Both are already on the NAS."
+            came = "Both are already in storage."
         dub = nasfix.dub_language(odd, kept)
         who = nasfix.describe(odd)
         if dub:
@@ -3854,8 +3924,9 @@ class MatchPage(QWidget):
         else:
             why = ""
         season_dir = os.path.basename(os.path.dirname(kept.dest_rel or odd.dest_rel))
-        rescan = (f"Ask Plex to rescan {season_dir} afterwards"
-                  if job.library and hasattr(self.win.ctl, "plex_scan_folder") else "")
+        server = server_name(self.win)
+        rescan = (f"Ask {server} to rescan {season_dir} afterwards"
+                  if server and job.library and hasattr(self.win.ctl, "server_scan_folder") else "")
         return FixView("error", p.text.rstrip("."), came + why, sides, opts, self.fix_choice.get(p.key, "version"),
                        note="Undo puts the names back.", rescan=rescan)
 
@@ -3888,7 +3959,7 @@ class MatchPage(QWidget):
                                   f"{where} and marked as checked by you.", "Confirm the match"))
         if not read and self._unread([ti]):
             opts.append(FixOption("read", "Read its title card first",
-                                  "Reads just this title, a few seconds." +
+                                  "Reads only this title, which takes a few seconds." +
                                   (f" If the card names {ep.title}, Confirm is chosen for you." if ep else ""),
                                   "Read the title card"))
         opts.append(FixOption("pick", "Pick another episode", f"Opens the episode list for title {ti}, free episodes "
@@ -3919,9 +3990,9 @@ class MatchPage(QWidget):
             for h in hs:
                 if h.where == "here":
                     parts.append(f"on this disc as title {h.title_index}" +
-                                 (", already on the NAS" if h.title_index in self._locked else ""))
+                                 (", already in storage" if h.title_index in self._locked else ""))
                 elif h.where == "disc":
-                    parts.append(f"on {h.phrase()}" + (", already on the NAS" if h.on_nas else ""))
+                    parts.append(f"on {h.phrase()}" + (", already in storage" if h.on_nas else ""))
                 else:
                     parts.append(f"in the library as “{h.name}”")
             text = f"It's {seasonmod._and(parts)}."
@@ -4005,15 +4076,15 @@ class MatchPage(QWidget):
         self.fill_table()
 
     def apply_nas(self, p, key: str):
-        """Rename on the NAS through the controller, on a worker thread; Undo puts it back the same way."""
+        """Rename in storage through the controller, on a worker thread; Undo puts it back the same way."""
         job, ctl = self.job, self.win.ctl
         plan = nasfix.plan(p, key, naming.Scheme.from_config(self.win.cfg))
         rescan = self.compare.rescan.isChecked() and bool(self.compare.rescan.text())
         if plan.deletes:
             names = "\n".join(os.path.basename(rel) for rel in plan.deletes)
-            if QMessageBox.question(self, "Delete from the NAS?",
-                                    f"{names}\n\nThis deletes the file and its subtitles from the NAS. It can't be "
-                                    "undone.") != QMessageBox.StandardButton.Yes:
+            if not confirm(self, "Delete from storage?",
+                           f"{names}\n\nThis deletes the file and its subtitles from storage. It can't be undone.",
+                           "Delete from storage", "Keep the file"):
                 return
 
         def ok(done):
@@ -4029,7 +4100,7 @@ class MatchPage(QWidget):
 
                 self.win.run_task("fix", lambda _p: ctl.undo_nas_fix(job, done, rescan), ok=undone,
                                   title="Couldn't put the names back",
-                                  next_step="Check that the NAS share is mounted, then try again.",
+                                  next_step="Check that the storage folder is mounted or plugged in, then try again.",
                                   done=self.render_fix)
                 self.render_fix()
 
@@ -4038,7 +4109,8 @@ class MatchPage(QWidget):
 
         self.win.run_task("fix", lambda _p: ctl.apply_nas_fix(job, plan, rescan), ok=ok,
                           title="Couldn't rename the files",
-                          next_step="Check that the NAS share is mounted, then try again.", done=self.render_fix)
+                          next_step="Check that the storage folder is mounted or plugged in, then try again.",
+                          done=self.render_fix)
         self.render_fix()
 
     def after_nas(self, select: str = ""):
@@ -4064,6 +4136,8 @@ class MatchPage(QWidget):
     SOURCE_WORDS = {"discdb": "TheDiscDB's record of this disc", "card": "Its title card",
                     "list": "The episode list from the case", "runtime": "Its running time, a guess",
                     "manual": "You picked it"}
+    SOURCE_CHIPS = {"discdb": "From TheDiscDB", "card": "From title card", "list": "From case list",
+                    "runtime": "By running time"}
 
     def card_time(self, ti: int, st=None) -> float | None:
         """Seconds into the title where its card names the episode, when it was read."""
@@ -4082,7 +4156,7 @@ class MatchPage(QWidget):
     def watch_tip(self, path: str, card_t: float | None) -> str:
         if not path:
             return "Available once the title is ripped"
-        where = "the copy on the NAS" if self.job and self.job.destination and \
+        where = "the copy in storage" if self.job and self.job.destination and \
             path.startswith(self.job.destination.rstrip("/") + "/") else "the ripped file"
         if card_t is not None:
             return f"Watch {where}, from the title card ({fmt_len(int(card_t))}) or the beginning"
@@ -4170,7 +4244,7 @@ class MatchPage(QWidget):
             return
         left = self.titles_left()
         if left is not None and not left:
-            self.set_saved("Every title is already on the NAS.")
+            self.set_saved("Every title is already in storage.")
             self.fill_table()
             return
         job.stage = "copy"
@@ -4197,7 +4271,7 @@ class CopyPage(QWidget):
 
         self.stack = QStackedWidget()
         self.empty = QWidget()
-        self.empty.setLayout(vbox(label("Copy to NAS", "h1"),
+        self.empty.setLayout(vbox(label("Copy to storage", "h1"),
                                   label("Nothing is being copied. Match a ripped disc's episodes, then choose Confirm "
                                         "and copy.", "muted", wrap=True), None, spacing=8, margins=(24, 24, 24, 24)))
         self.stack.addWidget(self.empty)
@@ -4215,7 +4289,7 @@ class CopyPage(QWidget):
         outer.addLayout(col, 1)
 
         self.meta = label("", "meta")
-        self.h1 = label("Copying to the NAS", "h1")
+        self.h1 = label("Copying to storage", "h1")
         self.sub = label("If the network drops, the copy picks up where it stopped.", "muted", wrap=True)
         self.pause_btn = button("Pause copy")
         self.pause_btn.clicked.connect(self.pause_clicked)
@@ -4286,8 +4360,8 @@ class CopyPage(QWidget):
             local.lay.addWidget(rb)
             rb.toggled.connect(lambda on, key=key: on and self.cleanup_changed(key))
         side_lay.addWidget(local)
-        plex, self.server, self.library = self._plex_card(True)
-        side_lay.addWidget(plex)
+        self.plex_card, self.server, self.library = self._plex_card(True)
+        side_lay.addWidget(self.plex_card)
         side_lay.addStretch(1)
         outer.addWidget(side, 0, Qt.AlignmentFlag.AlignTop)
         return inner
@@ -4301,8 +4375,7 @@ class CopyPage(QWidget):
         outer.addLayout(col, 1)
         self.f_meta = label("", "meta")
         self.f_h1 = label("Copying while it rips", "h1")
-        self.f_sub = label("A film is one title, so it goes to the NAS as it rips instead of waiting for the rip "
-                           "to end.", "muted", wrap=True)
+        self.f_sub = label("The film is copied to storage as it rips.", "muted", wrap=True)
         self.f_stop = button("Stop rip and copy")
         self.f_stop.clicked.connect(lambda: self.job and self.win.stop(self.job))
         top = hbox(vbox(self.f_meta, self.f_h1, self.f_sub, spacing=6), self.f_stop, spacing=16)
@@ -4312,7 +4385,7 @@ class CopyPage(QWidget):
 
         card = Card(margins=(20, 20, 20, 20), spacing=16)
         self.f_bars = {}
-        for key, name, colour in (("rip", "Ripped", RIP_LINE), ("nas", "On the NAS", NAS_LINE),
+        for key, name, colour in (("rip", "Ripped", RIP_LINE), ("nas", "In storage", NAS_LINE),
                                   ("check", "Checked", CHECK_LINE)):
             sw = QLabel()
             sw.setFixedSize(10, 10)
@@ -4346,13 +4419,13 @@ class CopyPage(QWidget):
         ends = Card(spacing=14)
         ends.lay.addWidget(label("When the rip ends", "h2"))
         self.f_step_nums, self.f_step_texts = self._steps(ends.lay)
-        self.f_gain = label("In Plex about a minute after the rip ends, instead of about 10.", wrap=True)
+        self.f_gain = label("", wrap=True)  # names the media server; set in refresh_film
         self.f_gain.setStyleSheet(f"color: {DONE_TEXT}; font-size: 13px;")
         ends.lay.addWidget(self.f_gain)
         side_lay.addWidget(ends)
 
         why = Card(spacing=10)
-        self.f_why_head = label("Why this disc can be copied while it rips", "h2", wrap=True)
+        self.f_why_head = label("Why this film can be copied while it rips", "h2", wrap=True)
         why.lay.addWidget(self.f_why_head)
         self.f_why_lines = []
         for _ in range(2):
@@ -4365,12 +4438,12 @@ class CopyPage(QWidget):
             r.setAlignment(tick, Qt.AlignmentFlag.AlignTop)
             why.lay.addLayout(r)
             self.f_why_lines.append((tick, txt))
-        self.f_why_foot = label("If either changes, the film is copied after the rip instead, and this screen says "
+        self.f_why_foot = label("If that changes, the film is copied after the rip instead, and this page says "
                                 "why.", "small", wrap=True)
         why.lay.addWidget(self.f_why_foot)
         side_lay.addWidget(why)
-        plex, self.f_server, self.f_library = self._plex_card(False)
-        side_lay.addWidget(plex)
+        self.f_plex_card, self.f_server, self.f_library = self._plex_card(False)
+        side_lay.addWidget(self.f_plex_card)
         side_lay.addStretch(1)
         outer.addWidget(side, 0, Qt.AlignmentFlag.AlignTop)
         return inner
@@ -4391,8 +4464,11 @@ class CopyPage(QWidget):
         return nums, texts
 
     def _plex_card(self, with_link: bool):
+        """The media server card. Its heading and link name the server; refresh fills them, and hides
+        the card when there is no media server."""
         plex = Card(spacing=8)
-        plex.lay.addWidget(label("Plex", "h2"))
+        plex.head = label("", "h2")
+        plex.lay.addWidget(plex.head)
         server = label("", mono=True)
         library = label("")
         plex.lay.addWidget(label("Server", "small"))
@@ -4400,9 +4476,11 @@ class CopyPage(QWidget):
         plex.lay.addSpacing(4)
         plex.lay.addWidget(label("Library", "small"))
         plex.lay.addWidget(library)
+        plex.link = None
         if with_link:
             plex.lay.addSpacing(6)
-            plex.lay.addWidget(link("Open in Plex", self.open_plex))
+            plex.link = link("", self.open_plex)
+            plex.lay.addWidget(plex.link)
         return plex, server, library
 
     # -- state --------------------------------------------------------------
@@ -4420,14 +4498,25 @@ class CopyPage(QWidget):
     def files(self) -> list[RippedFile]:
         return [f for f in self.job.files if f.dest_rel]
 
+    def place(self) -> str:
+        """Where the job copies to, for a sentence: "the Movies folder", or "storage" without a path."""
+        folder = os.path.basename(os.path.normpath(self.job.destination)) if self.job.destination else ""
+        return f"the {folder} folder" if folder else "storage"
+
     def refresh(self):
         job = self.job
         if not job:
             return
         film = self.film_layout()
         self.stack.setCurrentIndex(2 if film else 1)
-        url = self.win.cfg.plex_url
-        for srv, lib in ((self.server, self.library), (self.f_server, self.f_library)):
+        name = server_name(self.win)
+        url = mediaserver.server_url(self.win.cfg)
+        for card, srv, lib in ((self.plex_card, self.server, self.library),
+                               (self.f_plex_card, self.f_server, self.f_library)):
+            card.setVisible(bool(name))
+            card.head.setText(name)
+            if card.link is not None:
+                card.link.setText(f'<a href="#" style="color:{LINK}; text-decoration:none">Open in {name}</a>')
             srv.setText(re.sub(r"^https?://", "", url).rstrip("/") or "Not set. Add it in Settings.")
             lib.setText(job.library or "None. This destination has no library set.")
         if film:
@@ -4474,20 +4563,21 @@ class CopyPage(QWidget):
             frac = 1.0 if job.stage in ("plex", "done") else (job.progress if job.stage == "copy" else 0.0)
             copied = frac * total
         self.meta.setText(f"{job_name(job, layout).upper()} · {plural(len(rows), 'file')} · {fmt_size(total)}")
+        name = server_name(win)
         if job.stage == "done":
-            self.h1.setText("Copied to the NAS")
-            self.sub.setText("Every file was copied and its checksum compared with the local copy.")
+            self.h1.setText(f"Copied to {self.place()}")
+            self.sub.setText("Every file was copied and checked against the local copy.")
         elif job.stage == "plex":
-            self.h1.setText("Asking Plex to scan")
-            self.sub.setText("The files are on the NAS and checked.")
+            self.h1.setText(f"Asking {name} to scan" if name else "Finishing the copy")
+            self.sub.setText("The files are copied and checked.")
         elif job.stage == "failed":
             self.h1.setText("The copy stopped")
             self.sub.setText(job.status or "Something went wrong during the copy.")
         elif overlap:
             self.h1.setText("Copying as it rips")
-            self.sub.setText("Each title goes to the NAS as soon as it's ripped and matched.")
+            self.sub.setText("Each title is copied as soon as it's ripped and matched.")
         elif running:
-            self.h1.setText("Copying to the NAS")
+            self.h1.setText(f"Copying to {self.place()}")
             self.sub.setText("If the network drops, the copy picks up where it stopped.")
         elif job.progress > 0 and job.stage == "copy":
             self.h1.setText("Copy paused")
@@ -4535,15 +4625,19 @@ class CopyPage(QWidget):
         self.fill_files(rows, frac, running)
         stage_step = {"copy": 0, "plex": 1, "done": 3}.get(job.stage, 0 if overlap else -1)
         lib = job.library
-        texts = ["Compare checksums so the NAS copy is known to be identical.",
-                 f"Ask Plex to scan the {lib} library." if lib else
-                 "Plex isn't asked to scan, because this destination has no library set.",
-                 "Check that Plex lists the film." if layout == "movie" else "Check that Plex lists every episode."]
+        what = "the film" if layout == "movie" else "every episode"
+        # With no media server only the check is left; the scan steps are hidden.
+        texts = ["Check that each copied file matches the local copy.",
+                 "" if not name else f"Ask {name} to scan the {lib} library." if lib else
+                 f"{name} isn't asked to scan, because this destination has no library set.",
+                 f"Check that {name} lists {what}." if name else ""]
         for i, (num, txt) in enumerate(zip(self.step_nums, self.step_texts)):
             txt.setText(texts[i])
+            num.setVisible(bool(texts[i]))
+            txt.setVisible(bool(texts[i]))
             set_prop(num, "num", "on" if i <= stage_step else "off")
-        what = "the film" if layout == "movie" else "every episode"
-        labels = {"delete": f"Delete once Plex lists {what}", "7days": "Keep for 7 days, then delete", "keep": "Keep"}
+        labels = {"delete": f"Delete once {name} lists {what}" if name else f"Delete once {what} is copied and checked",
+                  "7days": "Keep for 7 days, then delete", "keep": "Keep"}
         for key, rb in self.keep_radios.items():
             rb.blockSignals(True)
             rb.setText(labels[key])
@@ -4568,7 +4662,7 @@ class CopyPage(QWidget):
         summary = (f"Transfer speed since the copy started: about {fmt_rate(avg, 0)} on average{dip}. "
                    f"{fmt_gb(last.total)} copied of {fmt_gb(total)}.")
         caption = f"{fmt_gb(last.total)} copied of {fmt_gb(total)} · avg {fmt_rate(avg, 0)} · peak {fmt_rate(peak, 0)}" \
-                  " · hover for each moment"
+                  " · hover for details"
         self.chart.set_data(xs, [ChartSeries("Transfer speed", ACCENT, mbs, fill=True,
                                              end_label=f"{fmt_gb(last.total)} copied")],
                             unit="MB/s", ref=(avg / 1e6, "avg", SOFT), readouts=readouts, x2=x2, summary=summary,
@@ -4624,7 +4718,7 @@ class CopyPage(QWidget):
                 pct = int(max(0.0, min(1.0, own)) * 100)
                 text, kind = (f"Copying · {pct}%" if running else f"Paused · {pct}%"), "warn"
             elif pstate == "waiting_match":
-                text, kind = "Waits for your check", "warn"
+                text, kind = "Needs a check", "warn"
             elif pstate == "ripping":
                 text, kind = f"Ripping · {int(p.ripped_bytes / (p.total_bytes or 1) * 100)}%", "plain"
             elif pstate == "waiting":
@@ -4650,16 +4744,16 @@ class CopyPage(QWidget):
         n = len(tp) or 1
         name = job.show + (f" ({job.year})" if job.year else "") if job.show else job_name(job, "movie")
         self.f_meta.setText(f"{name.upper()} · {plural(n, 'title')} · {fmt_size(total)}")
+        server = server_name(win)
         if job.stage == "done":
             self.f_h1.setText("Copied while it ripped")
-            self.f_sub.setText("The film is on the NAS and checked.")
+            self.f_sub.setText("The film is copied and checked.")
         elif job.stage == "plex":
-            self.f_h1.setText("Asking Plex to scan")
-            self.f_sub.setText("The film is on the NAS and checked.")
+            self.f_h1.setText(f"Asking {server} to scan" if server else "Finishing the copy")
+            self.f_sub.setText("The film is copied and checked.")
         elif ripping:
             self.f_h1.setText("Copying while it rips")
-            self.f_sub.setText("A film is one title, so it goes to the NAS as it rips instead of waiting for the rip "
-                               "to end.")
+            self.f_sub.setText(f"The film is copied to {self.place()} as it rips.")
         else:
             self.f_h1.setText("Rip stopped")
             self.f_sub.setText(job.status or "The rip stopped before the film was copied.")
@@ -4693,25 +4787,29 @@ class CopyPage(QWidget):
         self.f_route.setText(f"{tilde(src)} → {os.path.join(job.destination, dest) if dest else job.destination}")
 
         lib = job.library
-        texts = ["Send the few megabytes MakeMKV rewrites at the start of the file when it finishes.",
-                 "Check those parts. The rest was read back and checked as it arrived.",
-                 f"Ask Plex to scan the {lib} library." if lib else
-                 "Plex isn't asked to scan, because this destination has no library set."]
+        texts = ["Finish copying the film.",
+                 "Check that the copy matches the rip.",
+                 "" if not server else f"Ask {server} to scan the {lib} library." if lib else
+                 f"{server} isn't asked to scan, because this destination has no library set."]
         step = {"plex": 2, "done": 3}.get(job.stage, 0)
         for i, (num, txt) in enumerate(zip(self.f_step_nums, self.f_step_texts)):
             txt.setText(texts[i])
+            num.setVisible(bool(texts[i]))
+            txt.setVisible(bool(texts[i]))
             set_prop(num, "num", "on" if i <= step else "off")
+        self.f_gain.setText(f"The film is in {server} about a minute after the rip ends." if server else
+                            "The film is copied and checked about a minute after the rip ends.")
         langs = job.audio_langs or win.cfg.audio_langs
         names = [LANG_NAMES.get(code, code) for code in langs]
         lang_text = " and ".join(names) if len(names) <= 2 else ", ".join(names[:-1]) + " and " + names[-1]
         lines = ["The HDR setting is RAW, so nothing rewrites the file after the rip.",
-                 f"MakeMKV keeps only {lang_text or 'the chosen'} audio and subtitles during the rip, so there's no "
-                 "trimming afterwards."]
+                 f"MakeMKV keeps only {lang_text or 'the chosen'} audio and subtitles during the rip, so nothing is "
+                 "removed from the file afterwards."]
         if job.copy_mode_note:
             self.f_why_head.setText("Why this film is copied this way")
             lines = [job.copy_mode_note, ""]
         else:
-            self.f_why_head.setText("Why this disc can be copied while it rips")
+            self.f_why_head.setText("Why this film can be copied while it rips")
         for (tick, txt), line in zip(self.f_why_lines, lines):
             txt.setText(line)
             tick.setVisible(bool(line) and not job.copy_mode_note)
@@ -4719,9 +4817,9 @@ class CopyPage(QWidget):
         self.f_why_foot.setVisible(not job.copy_mode_note)
 
     def fill_film_chart(self, rips: list[Sample], copies: list[Sample], total: int, live: bool):
-        legend = [("line", RIP_LINE, "Ripped"), ("line", NAS_LINE, "On the NAS"), ("dash", MUTED, "Film size")]
+        legend = [("line", RIP_LINE, "Ripped"), ("line", NAS_LINE, "In storage"), ("dash", MUTED, "Film size")]
         if not rips:
-            self.f_chart.set_data([], [], unit="GB", title="Ripped and on the NAS", legend=legend,
+            self.f_chart.set_data([], [], unit="GB", title="Ripped and in storage", legend=legend,
                                   summary="Nothing ripped yet.")
             self.f_dip.setText("")
             return
@@ -4731,15 +4829,15 @@ class CopyPage(QWidget):
         rip_gb = [step_value(rx, ry, x) for x in xs]
         nas_gb = [step_value(cx, cy, x) for x in xs]
         tot = total / 1e9
-        readouts = [f"{fmt_elapsed(x)} · ripped {r:.1f} GB · on the NAS {c:.1f} GB" for x, r, c in zip(xs, rip_gb, nas_gb)]
+        readouts = [f"{fmt_elapsed(x)} · ripped {r:.1f} GB · in storage {c:.1f} GB" for x, r, c in zip(xs, rip_gb, nas_gb)]
         series = [ChartSeries("Ripped", RIP_LINE, rip_gb, end_label=f"Ripped {rip_gb[-1]:.1f} GB"),
-                  ChartSeries("On the NAS", NAS_LINE, nas_gb, end_label=f"On the NAS {nas_gb[-1]:.1f} GB")]
+                  ChartSeries("In storage", NAS_LINE, nas_gb, end_label=f"In storage {nas_gb[-1]:.1f} GB")]
         gaps = [r - c for r, c in zip(rip_gb, nas_gb)]
         streaming = [g for g, r in zip(gaps, rip_gb) if 0 < r < tot]
         typical = sorted(streaming)[len(streaming) // 2] if streaming else 0.0
         worst_i = max(range(len(gaps)), key=lambda i: gaps[i] if rip_gb[i] < tot else -1)
         worst = gaps[worst_i]
-        text = f"The NAS copy stays about {typical:.1f} GB behind the rip." if streaming else ""
+        text = f"The copy in storage stays about {typical:.1f} GB behind the rip." if streaming else ""
         if streaming and worst > max(1.0, 2 * typical) and rip_gb[worst_i] < tot:
             a = worst_i
             while a > 0 and gaps[a - 1] > typical * 1.5:
@@ -4752,10 +4850,10 @@ class CopyPage(QWidget):
         self.f_dip.setText(text)
         mins = max(1, round(xs[-1] / 60))
         summary = (f"Ripped and copied over {mins} minutes. Both lines rise together to {rip_gb[-1]:.1f} GB of "
-                   f"{tot:.1f} GB; the NAS copy trails by about {typical:.1f} GB" +
+                   f"{tot:.1f} GB; the copy in storage trails by about {typical:.1f} GB" +
                    (f", and briefly by {worst:.1f} GB when the network slowed." if worst > 2 * typical else "."))
         self.f_chart.set_data(xs, series, unit="GB", ref=(tot, f"{tot:.1f} GB · the whole film", MUTED),
-                              readouts=readouts, summary=summary, title="Ripped and on the NAS", legend=legend,
+                              readouts=readouts, summary=summary, title="Ripped and in storage", legend=legend,
                               live=live)
 
     def pause_clicked(self):
@@ -4775,8 +4873,9 @@ class CopyPage(QWidget):
             self.win.error("Couldn't save the setting", str(exc), "Check there is free space in your home folder.")
 
     def open_plex(self):
-        url = self.win.cfg.plex_url
-        QDesktopServices.openUrl(QUrl(url.rstrip("/") + "/web/index.html" if url else "https://app.plex.tv/desktop"))
+        url = mediaserver.home_url(self.win.cfg)
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
 
 
 # ---------------------------------------------------------------------------
@@ -4831,7 +4930,7 @@ class NeedsCard(QFrame):
             hl.addWidget(self.retry)
         elif item.ready_to_copy:
             # With titles still to check, the ready ones can go ahead without them.
-            text = f"Copy the {item.ready_to_copy} ready now" if item.checks else \
+            text = f"Copy {plural(item.ready_to_copy, 'ready title')} now" if item.checks else \
                 f"Copy {plural(item.ready_to_copy, 'title')} now"
             self.copy_btn = button(text, primary=not item.checks, small=True)
             self.copy_btn.clicked.connect(lambda: page.copy_ready(job))
@@ -4910,7 +5009,8 @@ class NeedsCard(QFrame):
 
 
 ENC_ACTIVE = ("waiting", "encoding", "paused", "checking", "copying")
-ENC_STEPS = (("encoding", "Encode AV1"), ("checking", "Check quality"), ("copying", "Copy to the NAS"), ("verified", "In Plex"))
+# The last step's label names the media server ("In Plex"), or reads "Copied" with none; EncodeCard sets it.
+ENC_STEPS = (("encoding", "Encode AV1"), ("checking", "Check quality"), ("copying", "Copy to storage"), ("verified", ""))
 
 
 def hms(seconds: float) -> str:
@@ -4926,6 +5026,7 @@ class EncodeCard(QFrame):
         self.page, self.job = page, job
         self.setObjectName("encodeCard")
         win = page.win
+        self.server = server = server_name(win)
         self.name = label(f"{job_name(job, win.layout_of(job))} · AV1 version")
         self.name.setStyleSheet("font-weight: 600;")
         self.line = label("", wrap=True)
@@ -4937,7 +5038,9 @@ class EncodeCard(QFrame):
         top.setStretch(0, 1)
         self.steps = []
         sl = hbox(spacing=6)
-        for _key, name in ENC_STEPS:
+        for key, name in ENC_STEPS:
+            if key == "verified":
+                name = f"In {server}" if server else "Copied"
             lab = label(name, "small")
             lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
             sl.addWidget(lab, 1)
@@ -4948,8 +5051,9 @@ class EncodeCard(QFrame):
         self.bar = colour_bar("#B392F0", 6)
         self.size_text = label("", "small")
         self.eta = label("", "small")
-        self.foot = label("The remux is already in Plex. The AV1 version is added when it passes the quality check.",
-                          "field", wrap=True)
+        self.foot = label(f"The remux is already in {server}. The AV1 version is added when it passes the quality "
+                          "check." if server else "The remux is already copied. The AV1 version is copied next to it "
+                          "when it passes the quality check.", "field", wrap=True)
         self.setLayout(vbox(top, sl, hbox(self.left_text, None, self.rate), self.bar,
                             hbox(self.size_text, None, self.eta), self.foot, spacing=10, margins=(18, 16, 18, 16)))
         self.refresh()
@@ -4976,7 +5080,7 @@ class EncodeCard(QFrame):
             qname = ""
         pct = int(e.fraction * 100)
         what = {"waiting": "Waiting to encode", "encoding": f"Encoding · {pct}%", "paused": f"Paused at {pct}%",
-                "checking": "Checking the quality", "copying": "Copying to the NAS"}[e.state]
+                "checking": "Checking the quality", "copying": "Copying to storage"}[e.state]
         self.line.setText(f"{which}{what} · {enc_name}" + (f" · {qname} quality" if qname else ""))
         self.pause.setText("Resume" if e.state == "paused" else "Pause")
         self.pause.setEnabled(e.state in ("encoding", "paused"))
@@ -4992,15 +5096,18 @@ class EncodeCard(QFrame):
         self.rate.setText("paused" if e.state == "paused" else (f"{e.fps:.1f} fps" if e.fps else ""))
         self.bar.setValue(int(e.fraction * 1000))
         src = next((f.size_bytes for f in self.job.files if f.title_index == e.title_index), 0)
-        self.size_text.setText(f"Size so far {fmt_size(e.size_bytes)} · heading for about {fmt_size(e.projected_bytes)}"
+        self.size_text.setText(f"Size so far {fmt_size(e.size_bytes)} · about {fmt_size(e.projected_bytes)} when done"
                                + (f" (remux {fmt_size(src)})" if src else "") if e.size_bytes else "")
         eta = e.eta_seconds
         self.eta.setText("" if not eta or e.state != "encoding" else
                          (f"about {int(eta // 3600)} h {int(eta % 3600 // 60):02d} min left" if eta >= 3600
                           else f"about {max(1, int(eta // 60))} min left"))
         if len(todo) > 1:
-            self.foot.setText(f"{plural(len(todo) - 1, 'more title')} after this one. The remuxes are already in Plex; "
-                              "each AV1 version is added when it passes the quality check.")
+            more = plural(len(todo) - 1, 'more title')
+            self.foot.setText(f"{more} after this one. The remuxes are already in {self.server}; each AV1 version is "
+                              "added when it passes the quality check." if self.server else
+                              f"{more} after this one. The remuxes are already copied; each AV1 version is copied "
+                              "next to its remux when it passes the quality check.")
 
     def toggle_pause(self):
         e, _ = self.current()
@@ -5012,30 +5119,36 @@ class EncodeCard(QFrame):
         self.refresh()
 
     def stop_clicked(self):
-        if QMessageBox.question(self, "Stop the AV1 version?",
-                                "Stops this encode and skips the AV1 version for the rest of this disc. The remux "
-                                "stays in Plex.") == QMessageBox.StandardButton.Yes:
+        if confirm(self, "Stop the AV1 version?",
+                   f"Stops this encode and skips the AV1 version for the rest of this disc. The remux stays in "
+                   f"{self.server}." if self.server else
+                   "Stops this encode and skips the AV1 version for the rest of this disc. The remux is kept.",
+                   "Stop encoding", "Keep encoding"):
             self.page.win.ctl.stop_encode(self.job)
             self.page.win.refresh_jobs()
 
 
 class SeasonCard(Card):
-    COLOURS = {"plex": ("#1F2A22", "#3E6B50", "#8FE0B0", "In Plex"),
+    # The "plex" label is set per card: "In Plex", "In Jellyfin", or "Copied" with no media server.
+    COLOURS = {"plex": ("#1F2A22", "#3E6B50", "#8FE0B0", ""),
                "ripping": ("#2A2419", "#8A6A33", "#F5C27A", "Ripping now"),
-               "ripped": ("#15202B", "#2E4A63", "#A9D1F6", "Ripped, not on the NAS yet"),
+               "ripped": ("#15202B", "#2E4A63", "#A9D1F6", "Ripped, not copied yet"),
                "todo": ("#1A1D20", "#2E3338", "#7D858C", "Not ripped yet")}
 
-    def __init__(self, view):
+    def __init__(self, view, server: str = ""):
         super().__init__(margins=(18, 16, 18, 16), spacing=12)
         name = label(f"{view.show} · Season {view.season}")
         name.setStyleSheet("font-weight: 600;")
-        self.lay.addLayout(hbox(name, label(f"{view.in_plex} of {len(view.episodes)} episodes in Plex", "small"),
-                                None, spacing=14))
+        in_label = f"In {server}" if server else "Copied"
+        count = (f"{view.in_plex} of {len(view.episodes)} episodes in {server}" if server else
+                 f"{view.in_plex} of {len(view.episodes)} episodes copied")
+        self.lay.addLayout(hbox(name, label(count, "small"), None, spacing=14))
         grid = QGridLayout()
         grid.setSpacing(6)
         per_row = 13
         for k, e in enumerate(view.episodes):
             bg, border, fg, what = self.COLOURS.get(e.state, self.COLOURS["todo"])
+            what = what or in_label
             cell = QLabel(f"E{e.number:02d}" + (f"\nDisc {e.disc}" if e.disc else "\n—"))
             cell.setAlignment(Qt.AlignmentFlag.AlignCenter)
             cell.setMinimumHeight(48)
@@ -5048,8 +5161,8 @@ class SeasonCard(Card):
             grid.setColumnStretch(c, 1)
         self.lay.addLayout(grid)
         sq = lambda c: f'<span style="color:{c}">■</span>'  # noqa: E731
-        legend = label(f"{sq('#6FCF97')} In Plex &nbsp;&nbsp; {sq(ACCENT)} Ripping now &nbsp;&nbsp; "
-                       f"{sq(LINK)} Ripped, not on the NAS yet &nbsp;&nbsp; {sq('#3A4046')} Not ripped yet", "small")
+        legend = label(f"{sq('#6FCF97')} {in_label} &nbsp;&nbsp; {sq(ACCENT)} Ripping now &nbsp;&nbsp; "
+                       f"{sq(LINK)} Ripped, not copied yet &nbsp;&nbsp; {sq('#3A4046')} Not ripped yet", "small")
         legend.setTextFormat(Qt.TextFormat.RichText)
         self.lay.addWidget(legend)
         if view.next_text:
@@ -5072,14 +5185,20 @@ class DoneRow(QFrame):
         what = "film" if win.layout_of(job) == "movie" else "episode"
         size = sum(f.size_bytes for f in job.files if f.state == "verified")
         when = ago(item.done_at)
-        line = label(f"In Plex {when} · {job.library or 'not scanned'} · {plural(n, what)}, {fmt_size(size)}"
-                     if when else f"In Plex · {plural(n, what)}, {fmt_size(size)}", "small")
+        server = server_name(win)
+        if server:
+            line = label(f"In {server} {when} · {job.library or 'not scanned'} · {plural(n, what)}, {fmt_size(size)}"
+                         if when else f"In {server} · {plural(n, what)}, {fmt_size(size)}", "small")
+        else:
+            line = label(f"Copied {when} · {plural(n, what)}, {fmt_size(size)}"
+                         if when else f"Copied · {plural(n, what)}, {fmt_size(size)}", "small")
         texts = vbox(name, line, spacing=2)
-        plex = link("Open in Plex", lambda: page.open_plex(job))
+        plex = link(f"Open in {server}", lambda: page.open_plex(job))
+        plex.setVisible(bool(server))
         self.free = button(f"Delete local copy · {fmt_size(item.safe_bytes)}" if item.safe_bytes else "Local copy deleted",
                            small=True)
         self.free.setEnabled(bool(item.safe_bytes))
-        self.free.setToolTip("Deletes the files in the local rip folder. The copies on the NAS were read back and match.")
+        self.free.setToolTip("Deletes the files in the local rip folder. The copies in storage were read back and match.")
         self.free.clicked.connect(lambda: page.free_local(job))
         hist = link("Move to History", lambda: page.dismiss(job))
         lay = hbox(dot, texts, None, plex, self.free, hist, spacing=14, margins=(16, 10, 16, 10))
@@ -5154,7 +5273,8 @@ class QueuePage(QWidget):
                         tuple((e.title_index, e.state in ENC_ACTIVE, e.state == "failed")
                               for e in getattr(i, "encodes", []))) for i in view.items),
                  tuple((s.show, s.season, tuple((e.number, e.state) for e in s.episodes), s.next_text)
-                       for s in view.seasons))
+                       for s in view.seasons),
+                 server_name(self.win))  # a new media server changes the text on every card
         if shape != self._shape:
             self._shape = shape
             self.rebuild(needs, working, done, view.seasons)
@@ -5163,9 +5283,9 @@ class QueuePage(QWidget):
                 card.job = next((i.job for i in working if i.job.id == card.job.id), card.job)
                 card.refresh()
         safe = view.safe_bytes
-        self.storage.setText(f"{self.win.cfg.rip_dir} holds {fmt_size(view.local_bytes)}; {fmt_size(safe)} of it is "
-                             "already checked on the NAS and can be deleted. The clean-up setting deletes it later "
-                             "on its own." if view.local_bytes else f"{self.win.cfg.rip_dir} is empty.")
+        self.storage.setText(f"{self.win.cfg.rip_dir} holds {fmt_size(view.local_bytes)}. {fmt_size(safe)} of it is "
+                             "copied and checked, and can be deleted now, or later as set under Local copy on the "
+                             "Copy page." if view.local_bytes else f"{self.win.cfg.rip_dir} is empty.")
         self.free_all.setText(f"Delete checked rips now · {fmt_size(safe)}" if safe else "Nothing to delete")
         self.free_all.setEnabled(bool(safe))
 
@@ -5214,11 +5334,13 @@ class QueuePage(QWidget):
         if seasons:
             box = vbox(self.section("Seasons in progress", MUTED), spacing=10)
             for s in seasons:
-                box.addWidget(SeasonCard(s))
+                box.addWidget(SeasonCard(s, server_name(self.win)))
             self.body.addLayout(box)
         box = vbox(spacing=10)
+        server = server_name(self.win)
         top = hbox(self.section("Done", "#8FE0B0", len(done)),
-                   label("Each moves to History a day after it reaches Plex.", "small"), None, spacing=14)
+                   label(f"Each moves to History a day after it reaches {server}." if server else
+                         "Each moves to History a day after it's copied.", "small"), None, spacing=14)
         if done:
             top.addWidget(link("Move all to History", lambda: [self.dismiss(i.job, refresh=False) for i in done]
                                and self.win.refresh_jobs()))
@@ -5250,8 +5372,8 @@ class QueuePage(QWidget):
         except Exception as exc:
             self.win.error("Couldn't delete the local copy", str(exc), "Check the rip folder's permissions.")
             return
-        self.note.setText(f"Deleted {fmt_size(freed)} of local rips already checked on the NAS." if freed
-                          else "Nothing was deleted: no local rip is checked on the NAS yet.")
+        self.note.setText(f"Deleted {fmt_size(freed)} of local rips that were already copied and checked." if freed
+                          else "Nothing was deleted: no local rip has been copied and checked yet.")
         self.note.show()
         self.win.refresh_jobs()
         self.win.update_footer()
@@ -5263,9 +5385,10 @@ class QueuePage(QWidget):
         return True
 
     def open_plex(self, job: Job):
-        self.win.run_task(f"plex:{job.id}", lambda _p: self.win.ctl.plex_link(job),
-                          ok=lambda url: QDesktopServices.openUrl(QUrl(url)), title="Couldn't open Plex",
-                          next_step="Check that the Plex server is running.")
+        server = server_name(self.win) or "the media server"
+        self.win.run_task(f"plex:{job.id}", lambda _p: self.win.ctl.server_link(job),
+                          ok=lambda url: QDesktopServices.openUrl(QUrl(url)), title=f"Couldn't open {server}",
+                          next_step=f"Check that {server} is running.")
 
     def eject_changed(self, on: bool):
         self.win.cfg.eject_after_rip = on
@@ -5276,10 +5399,10 @@ class QueuePage(QWidget):
 
 
 class SetupDialog(QDialog):
-    """First-run setup: check this computer, choose where rips go, and connect Plex. Each step can be
-    revisited from Settings → Run the setup again."""
+    """First-run setup: check this computer, choose where rips go, and connect a media server. Each step
+    can be revisited from Settings → Run the setup again."""
 
-    STEPS = ("Check this computer", "Where rips go", "Plex")
+    STEPS = ("Check this computer", "Where rips go", "Media server")
 
     def __init__(self, win: "MainWindow"):
         super().__init__(win)
@@ -5376,8 +5499,8 @@ class SetupDialog(QDialog):
         cfg = self.win.cfg
         self.folder_edits = {}
         rows = vbox(spacing=12)
-        for kind, name, hint in (("tv", "TV shows", "for example the Shows folder on your NAS"),
-                                 ("movie", "Films", "for example the Movies folder on your NAS")):
+        for kind, name, hint in (("tv", "TV shows", "for example /mnt/media/Shows"),
+                                 ("movie", "Films", "for example /mnt/media/Movies")):
             d = cfg.destination(kind)
             edit = QLineEdit(d.path if d else "")
             edit.setPlaceholderText(hint)
@@ -5387,9 +5510,10 @@ class SetupDialog(QDialog):
             rows.addWidget(field(f"{name} go to", hbox(edit, b, spacing=8)))
             self.folder_edits[kind] = edit
         w.setLayout(vbox(label("Where rips go", "h2"),
-                         label("Choose the folders Plex uses for TV shows and films. A NAS share mounted on this "
-                               "computer works, as does a local folder. Each disc is ripped to this computer first "
-                               "and copied there when it's checked.", "muted", wrap=True),
+                         label("Choose the folders for TV shows and films. A network share mounted on this "
+                               "computer works, as does a USB drive or a local folder. If you use a media server, "
+                               "choose the folders its libraries read. Each disc is ripped to this computer first, "
+                               "then copied there.", "muted", wrap=True),
                          rows, label("More destinations, such as a separate Anime library, can be added in "
                                      "Settings.", "small", wrap=True), None, spacing=12))
         return w
@@ -5405,8 +5529,8 @@ class SetupDialog(QDialog):
         for k, e in self.folder_edits.items():
             set_prop(e, "warn", "true" if k in bad else "false")
         if bad:
-            self.win.error("Choose both folders", "Each of TV shows and Films needs a folder that exists on this "
-                           "computer.", "Use Browse to pick them. A NAS share has to be mounted first.")
+            self.win.error("Choose both folders", "TV shows and Films each need a folder that exists on this "
+                           "computer.", "Use Browse to pick them. A network share or USB drive has to be mounted first.")
         return not bad
 
     def save_folders(self):
@@ -5421,32 +5545,73 @@ class SetupDialog(QDialog):
         self.win.save_config(cfg)
         self.win.settings_saved()
 
-    # -- step 3: Plex ---------------------------------------------------------
+    # -- step 3: media server --------------------------------------------------
     def page_plex(self) -> QWidget:
         w = QWidget()
-        self.plex_url = QLineEdit(re.sub(r"^https?://", "", self.win.cfg.plex_url))
+        cfg = self.win.cfg
+        self.server_cards = []
+        row = QGridLayout()
+        row.setSpacing(12)
+        for i, (key, title, desc) in enumerate(SettingsPage.SERVERS):
+            c = ChoiceCard(key, title, "", desc, min_height=72)
+            c.picked.connect(self.pick_server)
+            self.server_cards.append(c)
+            row.addWidget(c, 0, i)
+            row.setColumnStretch(i, 1)
+        self.server_stack = QStackedWidget()
+
+        plex = QWidget()
+        self.plex_url = QLineEdit(re.sub(r"^https?://", "", cfg.plex_url))
         self.plex_url.setPlaceholderText("192.168.1.20:32400")
         self.plex_url.setProperty("mono", "true")
         self.plex_btn = button("Sign in to Plex")
         self.plex_btn.clicked.connect(self.sign_in)
         self.plex_note = label("", "small", wrap=True)
-        w.setLayout(vbox(label("Plex", "h2"),
-                         label("With Plex connected, each disc is added to the right library as soon as it's "
-                               "copied. This is optional: without it, Plex finds new files on its next scan.",
+        plex.setLayout(vbox(field("Plex server address", self.plex_url), hbox(self.plex_btn, None), self.plex_note,
+                            None, spacing=12))
+        self.server_stack.addWidget(plex)
+
+        jelly = QWidget()
+        self.jf_url = QLineEdit(re.sub(r"^https?://", "", cfg.jellyfin_url))
+        self.jf_url.setPlaceholderText("192.168.1.20:8096")
+        self.jf_url.setProperty("mono", "true")
+        self.jf_key = QLineEdit()
+        self.jf_key.setProperty("mono", "true")
+        self.jf_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.jf_key.setAccessibleName("Jellyfin API key")
+        self.jf_key.setPlaceholderText("Paste the key from Jellyfin")
+        jelly.setLayout(vbox(field("Jellyfin server address", self.jf_url), field("API key", self.jf_key),
+                             label("In Jellyfin, open Dashboard → API Keys and add one named Disc Shelf.", "small",
+                                   wrap=True), None, spacing=12))
+        self.server_stack.addWidget(jelly)
+
+        none = QWidget()
+        none.setLayout(vbox(label("Files are copied and checked, then the disc is done. Your media server finds them "
+                                  "on its next scan.", "small", wrap=True), None))
+        self.server_stack.addWidget(none)
+
+        w.setLayout(vbox(label("Media server", "h2"),
+                         label("With a media server connected, each disc is added to the right library as soon as "
+                               "it's copied. This is optional: without it, the server finds new files on its next scan.",
                                "muted", wrap=True),
-                         field("Plex server address", self.plex_url), hbox(self.plex_btn, None), self.plex_note,
-                         None, spacing=12))
+                         row, self.server_stack, spacing=12))
+        self.pick_server(cfg.media_server)
         return w
 
+    def pick_server(self, key: str):
+        self.server = key
+        for c in self.server_cards:
+            c.set_checked(c.key == key)
+        self.server_stack.setCurrentIndex([k for k, _, _ in SettingsPage.SERVERS].index(key))
+
     def save_plex(self):
-        url = self.plex_url.text().strip()
-        if url:
-            if not re.match(r"^https?://", url):
-                url = "http://" + url
-            if not re.search(r":\d+$", url.split("//", 1)[1]):
-                url += ":32400"
-            self.win.cfg.plex_url = url
-            self.win.save_config(self.win.cfg)
+        cfg = self.win.cfg
+        cfg.media_server = self.server
+        cfg.plex_url = normal_url(self.plex_url.text(), 32400) or cfg.plex_url
+        cfg.jellyfin_url = normal_url(self.jf_url.text(), 8096) or cfg.jellyfin_url
+        if self.jf_key.text().strip():
+            self.win.save_secret("jellyfin_key", self.jf_key.text().strip())
+        self.win.save_config(cfg)
 
     def sign_in(self):
         self.save_plex()
@@ -5473,6 +5638,8 @@ class SetupDialog(QDialog):
         if i == len(self.STEPS) - 1:
             self.save_plex()
             self.win.settings.load()
+            self.win.load_libraries()
+            self.win.settings_saved()
             self.accept()
             return
         self.go(i + 1)
@@ -5529,7 +5696,7 @@ class HistoryPage(QWidget):
                 w.layout().setStretch(1, 1)
             t.setCellWidget(r, 4, w)
             b = button("Open folder", small=True)
-            b.setAccessibleName(f"Open the NAS folder for {job_name(job)}")
+            b.setAccessibleName(f"Open the folder for {job_name(job)}")
             b.clicked.connect(lambda _c=False, job=job: self.open_folder(job))
             t.setCellWidget(r, 5, cell(b, margins=(8, 4, 20, 4)))
             t.setRowHeight(r, 52)
@@ -5544,7 +5711,7 @@ class HistoryPage(QWidget):
             path = job.destination
         if not path or not os.path.isdir(path):
             self.win.error("Couldn't open the folder", f"The folder {path or '(none)'} isn't there.",
-                           "Check that the NAS share is mounted, then try again.")
+                           "Check that the drive or network share is connected, then try again.")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
@@ -5603,7 +5770,7 @@ class LibraryPage(QWidget):
         self.dest_combo.setAccessibleName("Library to check")
         self.dest_combo.currentIndexChanged.connect(self.dest_changed)
         sl.addWidget(field("Library", self.dest_combo))
-        sl.addWidget(label("Films aren't checked yet. Only TV destinations are listed here.", "field", wrap=True))
+        sl.addWidget(label("Only TV destinations are listed here.", "field", wrap=True))
         self.summary = label("", "small", wrap=True)
         sl.addWidget(self.summary)
         self.show_list = QListWidget()
@@ -5638,7 +5805,7 @@ class LibraryPage(QWidget):
                     spacing=16)
         head.setStretch(0, 1)
         col.addLayout(head)
-        col.addWidget(label("Checks the files already on the NAS and renames them to the scheme you pick. Nothing "
+        col.addWidget(label("Checks the files already in this library and renames them to the scheme you pick. Nothing "
                             "changes until you choose Rename, and every rename can be undone.", "muted", wrap=True))
         self.empty = label("", "muted", wrap=True)
         col.addWidget(self.empty)
@@ -5651,7 +5818,7 @@ class LibraryPage(QWidget):
         tiles = QGridLayout()
         tiles.setSpacing(12)
         self.tiles = []
-        for i, cap in enumerate(("Files", "Named the Plex way", "Problems", "Shows not checked yet")):
+        for i, cap in enumerate(("Files", "Named for media servers", "Problems", "Shows not checked yet")):
             t = QFrame()
             t.setObjectName("note")
             big = label("")
@@ -5686,7 +5853,7 @@ class LibraryPage(QWidget):
 
         sc = Card(spacing=12)
         sc.lay.addWidget(label("Naming scheme", "h2"))
-        sc.lay.addWidget(label("All of these are names Plex reads. The default comes from Settings → File names; "
+        sc.lay.addWidget(label("Media servers read all of these names. The default comes from Settings → File names; "
                                "pick another here to use it for this rename only.", "small", wrap=True))
         self.scheme_group = QButtonGroup(self)
         self.scheme_opts: dict[str, Option] = {}
@@ -5713,11 +5880,10 @@ class LibraryPage(QWidget):
         sc.lay.addWidget(self.scope_note)
         self.rename_folders = QCheckBox()
         self.rename_folders.toggled.connect(self.folders_toggled)
-        sc.lay.addWidget(Option(self.rename_folders, "Rename show folders too",
-                                "Show folders get the name from Settings → File names, for example “Bluey (2018)”. "
-                                "Plex then matches each renamed show again, and files that aren't videos stay in "
-                                "the old folder. Left off, each show keeps its folder and only what's inside it "
-                                "is renamed."))
+        self.folders_opt = Option(self.rename_folders, "Rename show folders too",
+                                  "Each show folder gets the name from Settings → File names, for example "
+                                  "“Bluey (2018)”. Files that aren't videos stay in the old folder.")
+        sc.lay.addWidget(self.folders_opt)
         bl.addWidget(sc)
 
         ch = Card(margins=(0, 0, 0, 0), spacing=0)
@@ -5744,7 +5910,7 @@ class LibraryPage(QWidget):
         foot.setLayout(fl)
         self.rescan = QCheckBox()
         self.rescan.setChecked(True)
-        self.rescan_opt = Option(self.rescan, "Ask Plex to rescan the show",
+        self.rescan_opt = Option(self.rescan, "Ask the media server to rescan the show",
                                  "Watched status stays with each episode, not the file name.")
         fl.addWidget(self.rescan_opt)
         self.apply_note = label("", "small", wrap=True)
@@ -5831,7 +5997,7 @@ class LibraryPage(QWidget):
         if not root or not os.path.isdir(root):
             self.shows = []
             self.fill_list()
-            self.show_empty(f"The folder {root or '(none)'} isn't there. Check that the NAS share is mounted, "
+            self.show_empty(f"The folder {root or '(none)'} isn't there. Check that the drive or network share is connected, "
                             "then open Library again.")
             return
 
@@ -5854,7 +6020,7 @@ class LibraryPage(QWidget):
 
         self.win.run_task("library-list", lambda _p: library.list_shows(root), ok=got,
                           title="Couldn't read the library",
-                          next_step="Check that the NAS share is mounted, then open Library again.")
+                          next_step="Check that the drive or network share is connected, then open Library again.")
 
     # -- checking -----------------------------------------------------------
     def _check(self, folder: str, show_id: int | None, search, episodes) -> tuple:
@@ -5879,7 +6045,7 @@ class LibraryPage(QWidget):
         self.empty.show()
         self.win.run_task("library-check", lambda _p: self._check(folder, show_id, ctl.search_show, ctl.episodes),
                           ok=self.got_check, title="Couldn't check the show",
-                          next_step="Check that the NAS share is mounted, then choose Check again.",
+                          next_step="Check that the drive or network share is connected, then choose Check again.",
                           done=self.after_check)
         self.update_buttons()
 
@@ -5918,7 +6084,7 @@ class LibraryPage(QWidget):
         self.checking_all = True
         self.win.run_task("library-all", run, progress=lambda _f, t: self.all_note.setText(t),
                           title="Couldn't check every show",
-                          next_step="Check that the NAS share is mounted, then choose Check every show again.",
+                          next_step="Check that the drive or network share is connected, then choose Check every show again.",
                           done=finished)
         self.update_buttons()
 
@@ -5980,7 +6146,7 @@ class LibraryPage(QWidget):
         named = sum(p.named for p in self.plans.values())
         files = sum(p.files for p in self.plans.values())
         self.summary.setText(f"{plural(len(self.shows), 'show')} in this library, {checked} checked. "
-                             f"{named} of {plural(files, 'checked file')} have Plex-style names.")
+                             f"{named} of {plural(files, 'checked file')} are named for media servers.")
 
     def row_changed(self, row: int):
         if 0 <= row < len(self.shows) and self.shows[row] != self.current:
@@ -6088,13 +6254,18 @@ class LibraryPage(QWidget):
                 group = QButtonGroup(row)
                 cur = self.fixes.get(rel, "version")
                 folder = plan.target_folder
+                srv = self.win.cfg.media_server
+                both = {"plex": f"Plex shows one {p.title} and offers both under Play Version.",
+                        "jellyfin": f"Jellyfin shows one {p.title} and lists both versions when you play it."}.get(
+                            srv, f"Both files are kept, named as two versions of {p.title}.")
+                aside = (f"It moves to a {SET_ASIDE} folder in {folder}, which {mediaserver.name(self.win.cfg)} "
+                         "skips. Nothing is deleted." if srv != "none" else
+                         f"It moves to a {SET_ASIDE} folder in {folder}. Nothing is deleted.")
                 for key, title, desc in (
-                        ("version", f"Keep it as a second version of {p.title}",
-                         f"Plex shows one {p.title} and offers both under Play Version."),
+                        ("version", f"Keep it as a second version of {p.title}", both),
                         ("extra", "Save it as an extra",
                          f"It moves to {folder}/Featurettes and {p.title} keeps one file."),
-                        ("aside", "Set it aside",
-                         f"It moves to a {SET_ASIDE} folder in {folder}, which Plex skips. Nothing is deleted.")):
+                        ("aside", "Set it aside", aside)):
                     rb = QRadioButton()
                     rb.setChecked(key == cur)
                     group.addButton(rb)
@@ -6232,12 +6403,21 @@ class LibraryPage(QWidget):
             self.all_btn.setEnabled(True)
         self.recheck.setEnabled(bool(self.current) and not busy)
         self.undo_btn.setEnabled(not busy and library.last_log(self.undo_dir()) is not None)
-        can_scan = bool(self.win.settings.signed_in and self.dest and self.dest.library)
+        name = server_name(self.win)
+        can_scan = bool(name and self.win.settings.signed_in and self.dest and self.dest.library)
+        self.rescan_opt.setVisible(bool(name))     # with no media server there is nothing to ask
         self.rescan_opt.setEnabled(can_scan)
         self.rescan.setEnabled(can_scan)
-        self.rescan_opt.desc.setText("Watched status stays with each episode, not the file name." if can_scan else
-                                     "Sign in to Plex and choose a library for this destination in Settings to use "
-                                     "this.")
+        if name:
+            self.rescan.setText(f"Ask {name} to rescan the show")
+            how = ("Sign in to Plex and choose a library for this destination in Settings to use this."
+                   if self.win.cfg.media_server == "plex" else
+                   f"Connect to {name} and choose a library for this destination in Settings to use this.")
+            self.rescan_opt.desc.setText("Watched status stays with each episode, not the file name." if can_scan
+                                         else how)
+        rematch = f"{name} matches each renamed show again. " if name else ""
+        self.folders_opt.desc.setText("Each show folder gets the name from Settings → File names, for example "
+                                      f"“Bluey (2018)”. {rematch}Files that aren't videos stay in the old folder.")
         if not self.win.busy("library-rename") and not self.win.busy("library-undo"):
             ready = (f"Nothing has changed yet. {plural(len(renames), 'file')} "
                      f"{'is' if len(renames) == 1 else 'are'} ready to rename." if renames else "")
@@ -6258,13 +6438,14 @@ class LibraryPage(QWidget):
         folders = sorted({m.split("/", 1)[0] for pair in moves for m in pair})
         root, undo_dir, dest = self.root, self.undo_dir(), self.dest
         rescan = self.rescan.isChecked() and self.rescan.isEnabled()
+        name = server_name(self.win)
         label_text = f"{plural(len(renames), 'file')} in " + (self.current if self.scope == "show" else dest.label)
         ctl = self.win.ctl
         targets = sorted({r.dst.split("/", 1)[0] for r in renames})
 
         def run(progress):
             library.apply(root, moves, undo_dir, label_text, extra, progress, scan_folders=folders)
-            return len(renames), self._plex_scan(ctl, dest, folders) if rescan else ""
+            return len(renames), self._plex_scan(ctl, dest, folders, name) if rescan else ""
 
         def ok(result):
             n, plex = result
@@ -6280,10 +6461,11 @@ class LibraryPage(QWidget):
         self.update_buttons()
 
     @staticmethod
-    def _plex_scan(ctl, dest, folders: list[str]) -> str:
-        """Ask Plex to scan each show folder that still exists. Never raises: the renames are done either way."""
-        fn = getattr(ctl, "plex_scan_folder", None)
-        if fn is None or not dest.library:
+    def _plex_scan(ctl, dest, folders: list[str], name: str) -> str:
+        """Ask the media server (`name`) to scan each show folder that still exists. Never raises: the renames
+        are done either way."""
+        fn = getattr(ctl, "server_scan_folder", None)
+        if fn is None or not dest.library or not name:
             return ""
         root_fn = getattr(ctl, "library_path", None)
         root = root_fn(dest) if root_fn else dest.path
@@ -6294,10 +6476,10 @@ class LibraryPage(QWidget):
             try:
                 fn(dest.library, f)
                 asked.append(f)
-            except Exception as exc:  # noqa: BLE001 -- the rename worked; say why Plex didn't scan
-                return f"Plex couldn't be asked to scan: {exc}"
-        return f"Plex is rescanning {asked[0]}." if len(asked) == 1 else \
-            (f"Plex is rescanning {len(asked)} show folders." if asked else "")
+            except Exception as exc:  # noqa: BLE001 -- the rename worked; say why the server didn't scan
+                return f"{name} couldn't be asked to scan ({exc}). Scan the show in {name} yourself."
+        return f"{name} is rescanning {asked[0]}." if len(asked) == 1 else \
+            (f"{name} is rescanning {len(asked)} show folders." if asked else "")
 
     def undo(self):
         from . import library
@@ -6307,10 +6489,11 @@ class LibraryPage(QWidget):
         log = library.read_log(path)
         folders = list(log.get("scan_folders") or [])
         dest, ctl, rescan = self.dest, self.win.ctl, self.rescan.isChecked() and self.rescan.isEnabled()
+        name = server_name(self.win)
 
         def run(progress):
             n, skipped = library.undo(path, progress)
-            return n, skipped, self._plex_scan(ctl, dest, folders) if rescan and dest else ""
+            return n, skipped, self._plex_scan(ctl, dest, folders, name) if rescan and dest else ""
 
         def ok(result):
             n, skipped, plex = result
@@ -6322,7 +6505,7 @@ class LibraryPage(QWidget):
             self.load_shows()
 
         self.win.run_task("library-undo", run, ok=ok, title="Couldn't undo the rename",
-                          next_step="Check that the NAS share is mounted, then try again.", done=self.update_buttons)
+                          next_step="Check that the drive or network share is connected, then try again.", done=self.update_buttons)
         self.update_buttons()
 
     def forget(self, folders: list[str]):
@@ -6350,7 +6533,7 @@ class DestRow(QFrame):
         left.setLayout(vbox(name, ex, spacing=4))
         self.path = QLineEdit(dest.path)
         self.path.setProperty("mono", "true")
-        self.path.setAccessibleName(f"NAS folder for {dest.label}")
+        self.path.setAccessibleName(f"Folder for {dest.label}")
         browse = button("Browse")
         browse.clicked.connect(self.browse)
         pw = QWidget()
@@ -6358,16 +6541,23 @@ class DestRow(QFrame):
         self.library = QComboBox()
         self.library.setEditable(True)
         self.library.setMinimumWidth(200)
-        self.library.setAccessibleName(f"Plex library for {dest.label}")
         page.fill_library_combo(self.library, dest.library)
-        lay = hbox(left, field("NAS folder", pw), field("Plex library to scan", self.library), spacing=20,
-                   margins=(20, 16, 20, 16))
+        self.lib_field = field("Library to scan", self.library)
+        self.lib_caption = self.lib_field.findChild(QLabel)
+        lay = hbox(left, field("Folder", pw), self.lib_field, spacing=20, margins=(20, 16, 20, 16))
         lay.setStretch(1, 1)
         lay.setAlignment(left, Qt.AlignmentFlag.AlignVCenter)
         self.setLayout(lay)
 
+    def set_server(self, name: str):
+        """Name the library column after the chosen server; with none, there is nothing to scan."""
+        self.lib_caption.setText(f"{name} library to scan" if name else "Library to scan")
+        self.library.setAccessibleName(f"{name or 'Media server'} library for {self.dest.label}")
+        self.library.setEnabled(bool(name))
+        self.library.setToolTip("" if name else "Choose a media server above to scan a library after copying.")
+
     def browse(self):
-        path = QFileDialog.getExistingDirectory(self, f"Choose the NAS folder for {self.dest.label}",
+        path = QFileDialog.getExistingDirectory(self, f"Choose the folder for {self.dest.label}",
                                                 self.path.text() or "/mnt")
         if path:
             self.path.setText(path)
@@ -6424,18 +6614,21 @@ class SettingsPage(QWidget):
         inner.setLayout(holder)
 
         head = hbox(vbox(label("Settings", "h1"),
-                         label("Where finished rips go, which Plex library scans them, and how HDR is kept.",
+                         label("Where finished rips go, how files are named, and what happens during and after a rip.",
                                "muted", wrap=True), spacing=6), None, link("Run the setup again", win.open_setup),
                     spacing=16)
         head.setStretch(0, 1)
         col.addLayout(head)
 
+        col.addWidget(self._server_card())
+
         dests = Card(margins=(0, 0, 0, 0), spacing=0)
         head = QFrame()
         head.setObjectName("cardHead")
-        head.setLayout(vbox(label("NAS destinations", "h2"),
-                            label("Each disc goes to the folder for its type. You can change it for one disc on the "
-                                  "Match screen.", "small", wrap=True), spacing=4, margins=(20, 14, 20, 14)))
+        head.setLayout(vbox(label("Where files go", "h2"),
+                            label("Any folder this computer can write to: a network share, a USB drive or a folder on "
+                                  "this disk. Each disc goes to the folder for its type, and you can change it for one "
+                                  "disc on the Match page.", "small", wrap=True), spacing=4, margins=(20, 14, 20, 14)))
         dests.lay.addWidget(head)
         self.rows_lay = vbox(spacing=0)
         dests.lay.addLayout(self.rows_lay)
@@ -6453,8 +6646,8 @@ class SettingsPage(QWidget):
         # File names (naming.Scheme): used for new rips, and the default on the Library page.
         names = Card(spacing=14)
         names.lay.addWidget(label("File names", "h2"))
-        names.lay.addWidget(label("Every choice here is a name Plex reads. Used for new rips, and offered on the "
-                                  "Library page for files already on the NAS.", "small", wrap=True))
+        names.lay.addWidget(label("Plex, Jellyfin and Emby read every choice here. New rips use it, and the Library "
+                                  "page offers it for files already copied.", "small", wrap=True))
         ngrid = QGridLayout()
         ngrid.setHorizontalSpacing(20)
         ngrid.setVerticalSpacing(14)
@@ -6477,8 +6670,8 @@ class SettingsPage(QWidget):
         self.name_safe = QCheckBox()
         self.name_safe.toggled.connect(lambda _on: self.names_changed())
         names.lay.addWidget(Option(self.name_safe, "Replace characters a Windows share can't store",
-                                   "A colon becomes “ - ”, and ? * \" < > | are removed. Leave it on for a NAS "
-                                   "share; the show's name in Plex still comes from its own records."))
+                                   "A colon becomes “ - ”, and ? * \" < > | are removed. Leave it on for a network "
+                                   "share. Media servers still show each show's real name."))
         self.name_example = label("", "paths")
         self.name_example.setStyleSheet(f"background: {SIDE}; border-radius: 8px; padding: 10px 14px; "
                                         "line-height: 190%;")
@@ -6498,7 +6691,7 @@ class SettingsPage(QWidget):
         self.hdr = HdrStatus()
         hdr.lay.addLayout(hbox(vbox(label("HDR and versions", "h2"),
                                     label("Defaults for 4K UHD discs. You can change them for one disc on the Rip "
-                                          "screen.", "small", wrap=True), spacing=4), None, self.hdr.badge,
+                                          "page.", "small", wrap=True), spacing=4), None, self.hdr.badges,
                                spacing=16))
         hdr.lay.addWidget(self.hdr.box)
         self.keep = QComboBox()
@@ -6510,13 +6703,13 @@ class SettingsPage(QWidget):
         self.convert = QCheckBox()
         self.convert.toggled.connect(self.policy_changed)
         hdr.lay.addWidget(Option(self.convert, "Convert Dolby Vision to profile 8.1",
-                                 "Rewrites the Dolby Vision layer with dovi_tool, without re-encoding the video, so "
-                                 "streaming boxes that play profile 8.1 show Dolby Vision instead of falling back to "
-                                 "HDR10. On discs with a full enhancement layer, that layer is dropped."))
+                                 "Lets streaming boxes that play profile 8.1 show Dolby Vision. The video isn't "
+                                 "re-encoded, but a full enhancement layer is dropped if the disc has one."))
         self.keep_1080 = QCheckBox()
-        hdr.lay.addWidget(Option(self.keep_1080, "Keep a 1080p Blu-ray from the same set as a second version",
-                                 "Plex picks it for phones and remote streams, so the NAS doesn't have to convert 4K "
-                                 "HDR. Adds about 20–30 GB per film."))
+        self.keep_1080_opt = Option(self.keep_1080, "Keep a 1080p Blu-ray from the same set as a second version",
+                                    "A second file for phones and remote streams that can't play 4K HDR. Adds about "
+                                    "20–30 GB per film.")       # name_server() fills in the chosen server
+        hdr.lay.addWidget(self.keep_1080_opt)
         names = label("Severance (2022) - S01E01 - Good News About Hell - 2160p.mkv\n"
                       "Severance (2022) - S01E01 - Good News About Hell - 1080p.mkv", "paths")
         names.setStyleSheet(f"background: {SIDE}; border-radius: 8px; padding: 10px 14px; line-height: 190%;")
@@ -6527,35 +6720,31 @@ class SettingsPage(QWidget):
         copying.lay.addWidget(label("Copying", "h2"))
         self.copy_as_ripped = QCheckBox()
         copying.lay.addWidget(Option(self.copy_as_ripped, "Copy each title as soon as it's ripped",
-                                     "While the next title rips, the last one goes to the NAS, so a disc is in Plex a "
-                                     "few minutes after the rip ends. A title waits if its match needs checking. Turn "
-                                     "this off to copy the whole disc after you confirm the matches."))
+                                     "Each title is copied while the next one rips. A title whose match needs "
+                                     "checking waits for you. Turn this off to copy the whole disc after you confirm "
+                                     "the matches."))
         self.stream_films = QCheckBox()
-        copying.lay.addWidget(Option(self.stream_films, "Copy films while they rip",
-                                     "A film is one title, so it's copied to the NAS as MakeMKV writes it and checked "
-                                     "as it arrives. It's in Plex about a minute after the rip ends instead of about "
-                                     "10. This needs the HDR setting at RAW and MakeMKV choosing the languages during "
-                                     "the rip; otherwise the film is copied after the rip, and the Copy screen says "
-                                     "why."))
+        self.stream_opt = Option(self.stream_films, "Copy films while they rip",
+                                 "Each film is copied while MakeMKV writes it.")    # name_server() fills it in
+        copying.lay.addWidget(self.stream_opt)
         col.addWidget(copying)
 
         matching = Card(spacing=12)
         matching.lay.addWidget(label("Matching", "h2"))
         self.read_cards = QCheckBox()
         matching.lay.addWidget(Option(self.read_cards, "Read title cards to match episodes",
-                                      "Many shows put the episode's name on screen near the start. Each title is read "
-                                      "with OCR as soon as it's ripped, skipping the theme song, and a title whose "
-                                      "match is only a guess from running times waits for it. A disc TheDiscDB "
-                                      "knows, or a list you enter from the case, always wins."))
+                                      "Reads the episode name many shows put on screen near the start, as each title "
+                                      "finishes ripping. A title matched only by its running time waits until its card "
+                                      "is read. A match from TheDiscDB, or a list you enter from the case, always "
+                                      "wins."))
         self.card_minutes = NoWheelComboBox()
         for m in (2, 5, 10, 20):
             self.card_minutes.addItem(f"{m} minutes" + (" (default)" if m == 5 else ""), m)
         self.card_minutes.setMaximumWidth(220)
         matching.lay.addWidget(field("Look for the title card up to", self.card_minutes))
-        matching.lay.addWidget(label("Reading stops at the first frame that names an episode, so a card a minute in "
-                                     "takes about 5 seconds. A title with no card is read to the limit, which takes "
-                                     "30 seconds to a minute for 5 minutes. Choose more for a show with a long "
-                                     "opening scene.", "small", wrap=True))
+        matching.lay.addWidget(label("Reading stops at the first frame that names an episode. A title with no card is "
+                                     "read up to this limit, which takes 30 to 60 seconds at 5 minutes. Choose more "
+                                     "for a show with a long opening scene.", "small", wrap=True))
         col.addWidget(matching)
 
         # AV1 versions of 4K discs: a smaller second copy; the remux is always kept.
@@ -6575,11 +6764,11 @@ class SettingsPage(QWidget):
         encs.setSpacing(12)
         for col_i, (key, name, tech, desc) in enumerate((
                 ("cpu", "Best quality, on the CPU", "SVT-AV1 · this computer's processor",
-                 "Smallest files for the quality, and the only one that rebuilds film grain. Slow: a 4K film takes "
+                 "Smallest files for the quality, and the only encoder that rebuilds film grain. A 4K film takes "
                  "hours, at low priority."),
                 ("gpu", "Fast, on the GPU", "NVENC AV1 · the graphics card",
-                 "A 4K film in well under an hour, and the processor stays free. Files are about a third bigger for "
-                 "the same quality."))):
+                 "A 4K film takes well under an hour, and the processor stays free. Files are about a third bigger "
+                 "for the same quality."))):
             c = ChoiceCard(key, name, tech, desc)
             c.picked.connect(self.pick_encoder)
             self.av1_cards.append(c)
@@ -6600,7 +6789,7 @@ class SettingsPage(QWidget):
         self.av1_tiles = []
         for i, (cap, sub) in enumerate((("Size of a 2 h 46 min 4K film", "the remux is about 62 GB"),
                                         ("Time to encode it", ""),
-                                        ("Extra space on the NAS", "per film, on top of the remux"))):
+                                        ("Extra space in storage", "per film, on top of the remux"))):
             t = QFrame()
             t.setObjectName("note")
             big = label("")
@@ -6615,15 +6804,15 @@ class SettingsPage(QWidget):
         ab.addWidget(self.av1_est_note)
         self.av1_grain = QCheckBox()
         self.av1_grain_opt = Option(self.av1_grain, "Rebuild film grain",
-                                    "Grain is removed before encoding and drawn back on playback, which keeps grainy "
-                                    "films sharp at a much smaller size. Encoding takes about 1.6 times as long. "
+                                    "Keeps grainy films sharp at a much smaller size. The grain is removed before "
+                                    "encoding and drawn back on playback. Encoding takes about 1.6 times as long. "
                                     "CPU encoder only.")
         ab.addWidget(self.av1_grain_opt)
         self.av1_grain.toggled.connect(lambda *_: self.av1_changed())
         self.av1_check = QCheckBox()
         ab.addWidget(Option(self.av1_check, "Check the quality before copying",
-                            "Scores 6 short clips against the disc (VMAF). Below 93, the AV1 version isn't copied "
-                            "and the Queue says so."))
+                            "Compares 6 short clips with the disc and scores them out of 100. Below 93, the AV1 "
+                            "version isn't copied and the Queue page says so."))
         self.av1_when = QComboBox()
         for key, text in (("after", "Right after the copy, at low priority"), ("idle", "Only when nothing is ripping"),
                           ("night", "Overnight, 1 am to 7 am")):
@@ -6631,14 +6820,11 @@ class SettingsPage(QWidget):
         ab.addWidget(field("When to encode", self.av1_when))
         note = QFrame()
         note.setObjectName("cardsBox")
-        nt = label("Plex picks the version each device can play. Many TV boxes can't decode AV1 (the Nvidia Shield and "
-                   "Apple TVs before 2026, for example), so they keep playing the 4K remux with Dolby Vision. The AV1 "
-                   "version is picked by phones, browsers and remote streams that can play it. HDR10 is kept in it; "
-                   "Dolby Vision stays in the remux only.", wrap=True)
+        self.av1_note = nt = label("", wrap=True)       # name_server() fills it in
         nt.setStyleSheet("color: #CFE3F5; font-size: 13px;")
         note.setLayout(vbox(nt, margins=(14, 12, 14, 12)))
         ab.addWidget(note)
-        ab.addWidget(label("How Plex sees the two versions, side by side in the same folder", "field"))
+        ab.addWidget(label("How the two versions are named, side by side in the same folder", "field"))
         prev = label("Dune Part Two (2024) - 2160p.mkv          HEVC · Dolby Vision + HDR10\n"
                      "Dune Part Two (2024) - 2160p AV1.mkv      AV1 · HDR10", mono=True)
         prev.setStyleSheet("font-size: 13px; color: #C3C8CD;")
@@ -6647,7 +6833,7 @@ class SettingsPage(QWidget):
         pv.setLayout(vbox(prev, margins=(14, 10, 14, 10)))
         ab.addWidget(pv)
         av.lay.addWidget(self.av1_box)
-        self.av1_on.toggled.connect(lambda on: self.av1_box.setVisible(on))
+        self.av1_on.toggled.connect(lambda on: (self.av1_box.setVisible(on), self.hdr.update(self.policy, None, on)))
         col.addWidget(av)
 
         grid = QGridLayout()
@@ -6661,23 +6847,10 @@ class SettingsPage(QWidget):
         rw = QWidget()
         rw.setLayout(hbox(self.rip_dir, rb, spacing=8))
         local.lay.addWidget(field("Folder on this computer", rw))
-        local.lay.addWidget(label("Discs are ripped here first, so a network drop never leaves a broken file on the NAS.",
+        local.lay.addWidget(label("Discs are ripped here first, so a dropped connection never leaves a broken file in storage.",
                                   "small", wrap=True))
         local.lay.addStretch(1)
-        plex = Card(spacing=12)
-        plex.lay.addWidget(label("Plex server", "h2"))
-        self.plex_url = QLineEdit()
-        self.plex_url.setProperty("mono", "true")
-        plex.lay.addWidget(field("Address", self.plex_url))
-        self.plex_status = label("", "small", wrap=True)
-        self.sign_in = button("Sign in to Plex")
-        self.sign_in.clicked.connect(self.start_sign_in)
-        sl = hbox(self.plex_status, self.sign_in, spacing=12)
-        sl.setStretch(0, 1)
-        plex.lay.addLayout(sl)
-        plex.lay.addStretch(1)
         grid.addWidget(local, 0, 0)
-        grid.addWidget(plex, 0, 1)
         col.addLayout(grid)
 
         self.saved = label("", "small")
@@ -6694,6 +6867,138 @@ class SettingsPage(QWidget):
         col.addStretch(1)
         self.setLayout(vbox(scroll_page(inner)))
         self.load()
+
+    SERVERS = (("plex", "Plex", "Sign in with your Plex account"),
+               ("jellyfin", "Jellyfin", "Uses an API key from your server"),
+               ("none", "No media server", "Only copies the files"))
+
+    def _server_card(self) -> QWidget:
+        """Which media server is asked to scan new rips: Plex, Jellyfin or none."""
+        card = Card(spacing=12)
+        card.lay.addWidget(label("Media server", "h2"))
+        card.lay.addWidget(label("After copying, Disc Shelf asks the server to scan the folder, so the disc shows up "
+                                 "in its library.", "small", wrap=True))
+        self.server_cards: list[ChoiceCard] = []
+        row = QGridLayout()
+        row.setSpacing(12)
+        for i, (key, title, desc) in enumerate(self.SERVERS):
+            c = ChoiceCard(key, title, "", desc, min_height=72)
+            c.picked.connect(self.pick_server)
+            self.server_cards.append(c)
+            row.addWidget(c, 0, i)
+            row.setColumnStretch(i, 1)
+        card.lay.addLayout(row)
+
+        self.server_stack = QStackedWidget()
+        plex = QWidget()
+        self.plex_url = QLineEdit()
+        self.plex_url.setProperty("mono", "true")
+        self.plex_url.setPlaceholderText("192.168.1.20:32400")
+        self.plex_status = label("", "small", wrap=True)
+        self.sign_in = button("Sign in to Plex")
+        self.sign_in.clicked.connect(self.start_sign_in)
+        sl = hbox(self.plex_status, self.sign_in, spacing=12)
+        sl.setStretch(0, 1)
+        plex.setLayout(vbox(field("Server address", self.plex_url), sl, spacing=12))
+        self.server_stack.addWidget(plex)
+
+        jelly = QWidget()
+        self.jf_url = QLineEdit()
+        self.jf_url.setProperty("mono", "true")
+        self.jf_url.setPlaceholderText("192.168.1.20:8096")
+        self.jf_key = QLineEdit()
+        self.jf_key.setProperty("mono", "true")
+        self.jf_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.jf_key.setAccessibleName("Jellyfin API key")
+        self.jf_status = label("", "small", wrap=True)
+        self.jf_test = button("Test the connection")
+        self.jf_test.clicked.connect(self.test_jellyfin)
+        jl = hbox(self.jf_status, self.jf_test, spacing=12)
+        jl.setStretch(0, 1)
+        jelly.setLayout(vbox(field("Server address", self.jf_url), field("API key", self.jf_key),
+                             label("In Jellyfin, open Dashboard → API Keys and add one named Disc Shelf. It is kept in "
+                                   "Disc Shelf's secrets file, not in the settings.", "small", wrap=True),
+                             jl, spacing=12))
+        self.server_stack.addWidget(jelly)
+
+        none = QWidget()
+        none.setLayout(vbox(label("Files are copied and checked, then the disc is done. Nothing is scanned, so Disc "
+                                  "Shelf can't say when a file shows up in a library. Files are still named so Plex, "
+                                  "Jellyfin and Emby can read them.", "small", wrap=True)))
+        self.server_stack.addWidget(none)
+        card.lay.addWidget(self.server_stack)
+        return card
+
+    def server_choice(self) -> str:
+        return next((c.key for c in self.server_cards if c.checked), "plex")
+
+    def show_server(self, key: str):
+        for c in self.server_cards:
+            c.set_checked(c.key == key)
+        self.server_stack.setCurrentIndex([k for k, _, _ in self.SERVERS].index(key))
+        name = mediaserver.NAMES.get(key, "")
+        for row in self.rows:
+            row.set_server(name)
+        # The {edition-…} tag is Plex's own. Without it an edition is named as a version
+        # ("Aliens (1986) - Special Edition"), which Jellyfin lists under the one film.
+        films = self.name_combos["name_film"]
+        model = films.model()
+        for i in range(films.count()):
+            if str(films.itemData(i)).startswith("edition"):
+                model.item(i).setEnabled(key == "plex")
+        films.setToolTip("" if key == "plex" else "Without Plex, an edition is named as a version, for example "
+                                                  "“Aliens (1986) - Special Edition”. Jellyfin lists it under the "
+                                                  "one film.")
+        self.names_changed()
+
+    def pick_server(self, key: str):
+        """Switching server takes effect at once, like signing in, so every page names the right one."""
+        cfg = self.win.cfg
+        if key == cfg.media_server:
+            return
+        old = cfg.media_server
+        cfg.media_server = key
+        try:
+            self.win.save_config(cfg)
+        except Exception as exc:
+            cfg.media_server = old
+            self.win.error("Couldn't save the setting", str(exc), "Check there is free space in your home folder.")
+            return
+        self.show_server(key)
+        self.libraries = []
+        self.win.load_libraries()
+        self.win.settings_saved()
+
+    def test_jellyfin(self):
+        url = normal_url(self.jf_url.text(), 8096)
+        key = self.jf_key.text().strip() or self.win.load_secret("jellyfin_key")
+        if not url or not key:
+            self.jf_status.setText("Enter the server address and an API key first.")
+            return
+        fn = getattr(self.win.ctl, "jellyfin_test", None)
+        if fn is None:
+            return
+
+        def ok(server: str):
+            cfg = self.win.cfg
+            cfg.jellyfin_url = url
+            try:
+                if self.jf_key.text().strip():
+                    self.win.save_secret("jellyfin_key", key)
+                self.win.save_config(cfg)
+            except Exception as exc:  # noqa: BLE001
+                self.win.error("Couldn't save the API key", str(exc), "Check there is free space in your home folder.")
+                return
+            self.jf_key.clear()
+            self.jf_key.setPlaceholderText("A key is saved")
+            self.connected_to = server
+            self.win.load_libraries()
+
+        def failed(exc):
+            self.jf_status.setText(f"Couldn't connect. {exc}")
+
+        self.jf_status.setText("Connecting…")
+        self.win.run_task("jellyfin", lambda _p: fn(url, key), ok=ok, err=failed, quiet=True)
 
     def fill_library_combo(self, combo: QComboBox, current: str):
         combo.clear()
@@ -6730,8 +7035,7 @@ class SettingsPage(QWidget):
         ts.setText("the processor at low priority" if enc == "cpu" else "the processor stays free")
         xb.setText(f"+{size / 1e9:.0f} GB")
         self.av1_est_note.setText("Measured from your earlier encodes." if measured else
-                                  "These are estimates. The first encodes measure the real numbers on your discs, "
-                                  "and these figures update.")
+                                  "These are estimates until your first encodes measure the real numbers.")
 
     def load(self):
         cfg = self.win.cfg
@@ -6747,7 +7051,7 @@ class SettingsPage(QWidget):
         self.keep.blockSignals(False)
         self.convert.blockSignals(False)
         self.convert.setEnabled(self.policy.keep == "all")
-        self.hdr.update(self.policy)
+        self.hdr.update(self.policy, None, self.av1_on.isChecked())
         self.keep_1080.setChecked(cfg.keep_1080p_version)
         self.copy_as_ripped.setChecked(cfg.copy_as_ripped)
         self.stream_films.setChecked(cfg.stream_films)
@@ -6766,9 +7070,38 @@ class SettingsPage(QWidget):
         self.av1_changed()
         self.rip_dir.setText(cfg.rip_dir)
         self.plex_url.setText(re.sub(r"^http://", "", cfg.plex_url))
+        self.jf_url.setText(re.sub(r"^http://", "", cfg.jellyfin_url))
+        self.jf_key.clear()
+        self.jf_key.setPlaceholderText("A key is saved" if self.win.load_secret("jellyfin_key") else
+                                       "Paste the key from Jellyfin")
+        self.show_server(cfg.media_server)
+        self.name_server()
         self.update_free()
         self.update_plex_status()
         self.load_names()
+
+    def name_server(self):
+        """The descriptions that depend on the chosen media server: the 1080p and AV1 second versions, and how
+        soon a film copied while it rips is ready."""
+        key, name = self.win.cfg.media_server, mediaserver.name(self.win.cfg)
+        self.keep_1080_opt.desc.setText({
+            "plex": "Plex picks it for phones and remote streams, so the server doesn't have to convert 4K HDR. "
+                    "Adds about 20–30 GB per film.",
+            "jellyfin": "Jellyfin lists both versions, and the viewer picks one when playing. The 1080p one suits "
+                        "phones and remote streams that can't play 4K HDR. Adds about 20–30 GB per film.",
+        }.get(key, "A second file for phones and remote streams that can't play 4K HDR. Adds about 20–30 GB per "
+                   "film."))
+        soon = (f"Each film is copied while MakeMKV writes it, so it's in {name} about a minute after the rip ends."
+                if name else
+                "Each film is copied while MakeMKV writes it, so the copy is done about a minute after the rip ends.")
+        self.stream_opt.desc.setText(soon + " It needs the HDR setting at RAW. When a film can't be copied this way, "
+                                     "it's copied after the rip and the Copy page says why.")
+        first = {"plex": "Plex picks the version each device can play.",
+                 "jellyfin": "Jellyfin lists both versions, and the viewer picks one when playing."}.get(
+                     key, "Both files are kept side by side.")
+        self.av1_note.setText(first + " TV boxes that can't decode AV1, such as the Nvidia Shield and Apple TVs "
+                              "before 2026, play the 4K remux with Dolby Vision. Phones, browsers and remote streams "
+                              "that can play AV1 can use the AV1 version, which has HDR10 but not Dolby Vision.")
 
     NAME_FIELDS = ("name_episode", "name_show_year", "name_season_pad", "name_film", "name_safe_chars")
 
@@ -6786,15 +7119,18 @@ class SettingsPage(QWidget):
     def name_scheme(self):
         from .naming import Scheme
         c = self.name_combos
+        film = c["name_film"].currentData()
+        if film.startswith("edition") and self.win.cfg.media_server != "plex":
+            film = "year"        # what naming.film_choice uses for new rips
         return Scheme(c["name_episode"].currentData(), bool(c["name_show_year"].currentData()),
-                      bool(c["name_season_pad"].currentData()), c["name_film"].currentData(),
+                      bool(c["name_season_pad"].currentData()), film,
                       self.name_safe.isChecked())
 
     def names_changed(self):
         """The example names, with made-up shows, under the choices as they are now."""
         from .naming import episode_relpath, movie_relpath
         s = self.name_scheme()
-        edition = "Special Edition" if s.film != "year" else ""
+        edition = "Special Edition" if s.film != "year" or self.win.cfg.media_server != "plex" else ""
         self.name_example.setText("\n".join((
             episode_relpath("Bluey", 2018, 1, 20, title="Markets", quality="1080p", scheme=s),
             episode_relpath("Star Trek: The Next Generation", 1987, 1, 1, 2, title="Encounter at Farpoint",
@@ -6804,7 +7140,7 @@ class SettingsPage(QWidget):
     def save_names(self, cfg) -> None:
         s = self.name_scheme()
         cfg.name_episode, cfg.name_show_year, cfg.name_season_pad = s.episode, s.show_year, s.season_pad
-        cfg.name_film, cfg.name_safe_chars = s.film, s.safe_chars
+        cfg.name_film, cfg.name_safe_chars = self.name_combos["name_film"].currentData(), s.safe_chars
 
     def _add_row(self, d: configmod.Destination):
         names = []
@@ -6813,6 +7149,7 @@ class SettingsPage(QWidget):
                 names.append(j.show)
         example = ", ".join(names[:2]) or ("Show/Season 01/" if d.layout == "tv" else "Film (Year)/")
         row = DestRow(self, d, example)
+        row.set_server(mediaserver.name(self.win.cfg))
         self.rows.append(row)
         self.rows_lay.addWidget(row)
 
@@ -6820,12 +7157,22 @@ class SettingsPage(QWidget):
         known = [(d, self.win.free_bytes(d.path)) for d in self.win.cfg.destinations]
         known = [(d, f) for d, f in known if f is not None]
         if not known:
-            self.free_line.setText("The NAS folders aren't mounted, so their free space isn't known.")
+            self.free_line.setText("The destination folders can't be found, so their free space isn't known.")
         else:
             d, f = known[0]
-            self.free_line.setText(f"The NAS share at {d.path} has {fmt_size(f)} free.")
+            self.free_line.setText(f"The {d.label} folder at {d.path} has {fmt_size(f)} free.")
 
     def update_plex_status(self, waiting: str = ""):
+        """The sign-in line of the chosen server."""
+        if self.win.cfg.media_server == "jellyfin":
+            libs = ", ".join(self.libraries)
+            if self.signed_in:
+                who = getattr(self, "connected_to", "") or "Jellyfin"
+                self.jf_status.setText(f"✓ Connected to {who}. Libraries found: {libs}." if libs else
+                                       "A key is saved. Choose Test the connection to check it.")
+            elif not self.jf_status.text().startswith(("Couldn't", "Connecting")):
+                self.jf_status.setText("Not connected. Add an API key so Disc Shelf can ask Jellyfin to scan new files.")
+            self.jf_test.setEnabled(not self.win.busy("jellyfin"))
         if waiting:
             self.plex_status.setText(waiting)
         elif self.signed_in:
@@ -6847,7 +7194,7 @@ class SettingsPage(QWidget):
         self.policy.keep = self.keep.currentData()
         self.policy.convert_p81 = self.convert.isChecked()
         self.convert.setEnabled(self.policy.keep == "all")
-        self.hdr.update(self.policy)
+        self.hdr.update(self.policy, None, self.av1_on.isChecked())
 
     def browse_rip(self):
         path = QFileDialog.getExistingDirectory(self, "Choose the local rip folder",
@@ -6904,15 +7251,14 @@ class SettingsPage(QWidget):
         dests = [r.value() for r in self.rows]
         missing = [d.label for d in dests if not d.path]
         if missing:
-            self.saved.setText(f"Choose a NAS folder for {missing[0]} before saving.")
+            self.saved.setText(f"Choose a folder for {missing[0]} before saving.")
             return
         rip = self.rip_dir.text().strip()
         if not rip:
             self.saved.setText("Choose a local rip folder before saving.")
             return
-        url = self.plex_url.text().strip()
-        if url and not re.match(r"^https?://", url):
-            url = "http://" + url
+        url = normal_url(self.plex_url.text(), 32400)
+        jf_url = normal_url(self.jf_url.text(), 8096)
         old = _copy.deepcopy(cfg)
         cfg.destinations = dests
         cfg.hdr = _copy.deepcopy(self.policy)
@@ -6929,19 +7275,29 @@ class SettingsPage(QWidget):
         cfg.av1_when = self.av1_when.currentData()
         cfg.rip_dir = rip
         cfg.plex_url = url or cfg.plex_url
+        cfg.jellyfin_url = jf_url or cfg.jellyfin_url
         self.save_names(cfg)
         try:
             self.win.save_config(cfg)
         except Exception as exc:
             for f in ("destinations", "hdr", "keep_1080p_version", "copy_as_ripped", "stream_films",
                       "read_title_cards", "av1_enabled", "av1_encoder", "av1_quality", "av1_grain", "av1_check",
-                      "av1_when", "rip_dir", "plex_url"):
+                      "av1_when", "rip_dir", "plex_url", "jellyfin_url"):
                 setattr(cfg, f, getattr(old, f))
             for f in self.NAME_FIELDS:
                 setattr(cfg, f, getattr(old, f))
             cfg.card_search_minutes = old.card_search_minutes
             self.win.error("Couldn't save the settings", str(exc), "Check there is free space in your home folder.")
             return
+        if self.jf_key.text().strip():
+            try:
+                self.win.save_secret("jellyfin_key", self.jf_key.text().strip())
+            except Exception as exc:  # noqa: BLE001
+                self.win.error("Couldn't save the API key", str(exc), "Check there is free space in your home folder.")
+                return
+            self.jf_key.clear()
+            self.jf_key.setPlaceholderText("A key is saved")
+            self.win.load_libraries()
         self.saved.setText("Settings saved.")
         self.win.settings_saved()
 
@@ -7285,7 +7641,7 @@ class MainWindow(QMainWindow):
         self.queue_badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.queue_badge.hide()
         self.nav_buttons["queue"].layout().addWidget(self.queue_badge)
-        for key, text, num in (("rip", "Rip", "1"), ("match", "Match episodes", "2"), ("copy", "Copy to NAS", "3")):
+        for key, text, num in (("rip", "Rip", "1"), ("match", "Match episodes", "2"), ("copy", "Copy to storage", "3")):
             self.nav_buttons[key] = NavButton(text, num)
         divider = QFrame()
         divider.setObjectName("divider")
@@ -7304,7 +7660,7 @@ class MainWindow(QMainWindow):
         foot.setObjectName("footer")
         self.rip_free = label("", "meta")
         self.rip_free.setStyleSheet(f"color: {TEXT};")
-        self.nas_name = label("NAS share", "field")
+        self.nas_name = label("Destination folder", "field")
         self.nas_free = label("", "meta")
         self.nas_free.setStyleSheet(f"color: {TEXT};")
         foot.setLayout(vbox(label("Local rip folder", "field"), self.rip_free, 6, self.nas_name, self.nas_free,
@@ -7350,7 +7706,7 @@ class MainWindow(QMainWindow):
         return key in self.tasks
 
     def run_task(self, key: str, fn, ok=None, title: str = "", next_step: str = "", progress=None, done=None,
-                 quiet: bool = False) -> None:
+                 quiet: bool = False, err=None) -> None:
         if key in self.tasks:
             return
         w = Worker(fn)
@@ -7361,7 +7717,9 @@ class MainWindow(QMainWindow):
             w.succeeded.connect(ok)
 
         def failed(msg):
-            if not quiet:
+            if err:
+                err(msg)
+            elif not quiet:
                 self.error(title or "Something stopped", msg, next_step)
 
         w.failed.connect(failed)
@@ -7743,7 +8101,7 @@ class MainWindow(QMainWindow):
 
         self.run_task("copy", work, ok=ok,
                       progress=lambda f, t: self.job_progress(job, f, t), done=done, title="The copy stopped",
-                      next_step="Check that the NAS share is mounted, then choose Resume copy. Files already copied "
+                      next_step="Check that the drive or network share is connected, then choose Resume copy. Files already copied "
                                 "are kept.")
         self.refresh_jobs()
 
@@ -7756,21 +8114,21 @@ class MainWindow(QMainWindow):
         if path and os.path.isdir(path):
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
         else:
-            self.error("The folder isn't there", f"{path or 'The NAS folder'} can't be found.",
-                       "Check that the NAS share is mounted.")
+            self.error("The folder isn't there", f"{path or 'The folder'} can't be found.",
+                       "Check that the drive or network share is connected.")
 
     def reverify(self, job: Job) -> None:
         def done(problems):
             if problems:
-                self.error("Some NAS copies don't match", "\n".join(problems),
+                self.error("Some copies don't match", "\n".join(problems),
                            "Choose Retry copy on the Queue page to copy them again.")
             else:
-                QMessageBox.information(self, "NAS copies checked",
+                QMessageBox.information(self, "Copies checked",
                                         f"Every copied file of {job_name(job, self.layout_of(job))} matches the rip.")
             self.refresh_jobs()
 
         self.run_task(f"verify:{job.id}", lambda p: self.ctl.reverify(job, p), ok=done,
-                      title="Couldn't check the NAS copies", next_step="Check that the NAS share is mounted.")
+                      title="Couldn't check the copies", next_step="Check that the drive or network share is connected.")
 
     def stop(self, job: Job):
         ev = self.cancels.get(job.id)
@@ -7872,8 +8230,14 @@ class MainWindow(QMainWindow):
         self.uhd_chip.setVisible(bool(self.disc and self.disc.uhd))
         job = self.running.get("rip") or self.running.get("copy")
         if job:
-            verb = "Ripping" if self.running.get("rip") is job else (
-                "Plex is scanning" if job.stage == "plex" else "Copying")
+            if self.running.get("rip") is job:
+                # Once MakeMKV is done, the rip's last step is checking or copying what it wrote.
+                verb = ("Checking the copy of" if job.status.startswith(("Checking the copy", "Checking the NAS copy",
+                                                                           "Ripped. Checking"))
+                        else "Finishing" if job.status.startswith("Ripped") else "Ripping")
+            else:
+                name = server_name(self)
+                verb = (f"{name} is scanning" if name else "Finishing") if job.stage == "plex" else "Copying"
             dot = f'<span style="color:{ACCENT}">●</span>&nbsp; '
             self.activity.setText(f"{dot}{verb} {job_name(job, self.layout_of(job))} · {int(job.progress * 100)}%")
             self.activity.show()
@@ -7898,23 +8262,31 @@ class MainWindow(QMainWindow):
                               f"{self.cfg.rip_dir} · not found")
         d = self.cfg.destination("tv") or (self.cfg.destinations[0] if self.cfg.destinations else None)
         if d:
-            self.nas_name.setText(f"NAS {os.path.basename(os.path.normpath(d.path)) or d.label} share")
+            self.nas_name.setText(f"{os.path.basename(os.path.normpath(d.path)) or d.label} folder")
             f = self.free_bytes(d.path)
-            self.nas_free.setText(f"{fmt_size(f)} free" if f is not None else "not mounted")
+            self.nas_free.setText(f"{fmt_size(f)} free" if f is not None else "not found")
 
-    def plex_signed_in(self) -> bool:
-        fn = getattr(self.ctl, "plex_signed_in", None)
+    def server_signed_in(self) -> bool:
+        fn = getattr(self.ctl, "server_signed_in", None)
         if fn is not None:
             return bool(fn())
-        return bool(configmod.load_secret("plex_token"))
+        return mediaserver.signed_in(self.cfg)
+
+    def load_secret(self, name: str) -> str:
+        fn = getattr(self.ctl, "load_secret", None)
+        return fn(name) if fn else configmod.load_secret(name)
+
+    def save_secret(self, name: str, value: str) -> None:
+        fn = getattr(self.ctl, "save_secret", None)
+        (fn or configmod.save_secret)(name, value)
 
     def load_libraries(self):
         try:
-            self.settings.signed_in = self.plex_signed_in()
+            self.settings.signed_in = self.server_signed_in()
         except Exception:
             self.settings.signed_in = False
         self.settings.update_plex_status()
-        fn = getattr(self.ctl, "plex_libraries", None)
+        fn = getattr(self.ctl, "server_libraries", None)
         if fn is None or not self.settings.signed_in:
             return
         self.run_task("libs", lambda _p: fn(), ok=lambda libs: self.settings.set_libraries(list(libs)), quiet=True)
@@ -7924,6 +8296,7 @@ class MainWindow(QMainWindow):
         self.rip.update_stream_note()
         self.update_footer()
         self.settings.update_free()
+        self.settings.name_server()
 
     def closeEvent(self, event):
         self.taskbar.clear()

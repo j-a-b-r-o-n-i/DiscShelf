@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     """The `disc-shelf` command (pyproject.toml) and scripts/disc_shelf.py both end up here."""
     if argv is None:
         argv = sys.argv[1:]
-    ap = argparse.ArgumentParser(prog="disc-shelf", description="Rip Blu-rays, 4K discs and DVDs and file the episodes for Plex.")
+    ap = argparse.ArgumentParser(prog="disc-shelf", description="Rip Blu-rays, 4K discs and DVDs and file the episodes for a media server.")
     ap.add_argument("--fake", action="store_true", help="use sample discs instead of a real drive")
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("drives", help="list optical drives MakeMKV can see")

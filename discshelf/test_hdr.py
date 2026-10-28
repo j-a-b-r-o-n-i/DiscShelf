@@ -128,6 +128,14 @@ def run():
         if not cond:
             failures.append(msg)
 
+    # The badge: RAW, lossless for a 8.1 conversion that loses nothing (MEL), lossy otherwise.
+    for pol, layer, want in ((HdrPolicy(), None, "raw"), (HdrPolicy(keep="hdr10"), "MEL", "lossy"),
+                             (HdrPolicy(convert_p81=True), None, "lossy"),
+                             (HdrPolicy(convert_p81=True), "FEL", "lossy"),
+                             (HdrPolicy(convert_p81=True), "MEL", "lossless")):
+        check(pol.compression(layer) == want, f"{pol} with {layer}: {pol.compression(layer)}, not {want}")
+    check("nothing is lost" in HdrPolicy(convert_p81=True).raw_reasons("MEL")[0], "MEL reason")
+
     cfg = Config()
 
     # HDR10 from the frames when the container leaves the colour tags out.

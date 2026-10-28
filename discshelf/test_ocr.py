@@ -148,7 +148,7 @@ def run():
             ocr.read_images(["a.jpg"], run=lambda cmd, **kw: failures.append(f"ran {cmd}"))
             check(False, "no engine raises")
         except OcrError as e:
-            check("install-disc-shelf" in str(e), f"no engine message: {e}")
+            check("tesseract" in str(e), f"no engine message: {e}")
         check(ocr.read_images([]) == [], "no images, no error")
     finally:
         env.close()

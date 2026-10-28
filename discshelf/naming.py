@@ -1,4 +1,4 @@
-"""Plex file and folder names, following Plex's guides for TV shows, movies and local extras.
+"""File and folder names media servers read, following Plex's guides for TV shows, movies and local extras.
 
 TV:     Show (2019)/Season 01/Show (2019) - S01E01 - Episode name.mkv
         a double episode is S01E01-E02, a second cut of an episode adds " - Short cut"
@@ -41,11 +41,22 @@ class Scheme:
         return cls(episode=getattr(cfg, "name_episode", d.episode) or d.episode,
                    show_year=bool(getattr(cfg, "name_show_year", d.show_year)),
                    season_pad=bool(getattr(cfg, "name_season_pad", d.season_pad)),
-                   film=getattr(cfg, "name_film", d.film) or d.film,
+                   film=film_choice(cfg),
                    safe_chars=bool(getattr(cfg, "name_safe_chars", d.safe_chars)))
 
 
 DEFAULT = Scheme()
+
+
+def film_choice(cfg) -> str:
+    """The film name choice in effect. The {edition-…} tag is Plex's own: Jellyfin lists two files
+    with different tags as two films. So with another media server (or none) the choice is name
+    and year, which names an edition as a version (" - Special Edition"), and Jellyfin lists
+    those under the one film."""
+    film = getattr(cfg, "name_film", "year") or "year"
+    if film.startswith("edition") and getattr(cfg, "media_server", "plex") != "plex":
+        return "year"
+    return film
 
 
 def safe_name(s: str) -> str:
@@ -204,7 +215,7 @@ def relpath_for(job: Job, match: Match, layout: str, scheme: Scheme | None = Non
     if match.target == "skip":
         return None
     if not job.show.strip():
-        raise ValueError("The job has no show or film name yet.")
+        raise ValueError("This disc has no show or film name yet.")
     if match.target == "extra":
         folder = show_dir if show_dir and layout != "movie" else show_folder(job.show, job.year, scheme)
         return extra_relpath(folder, match.extra_name, match.extra_folder, scheme=scheme)
@@ -216,7 +227,7 @@ def relpath_for(job: Job, match: Match, layout: str, scheme: Scheme | None = Non
             raise ValueError(f"Title {match.title_index} is set as an episode but has no episode chosen.")
         season = match.episode.season if match.episode.season is not None else job.season
         if season is None:
-            raise ValueError("The job has no season number.")
+            raise ValueError("This disc has no season number.")
         return episode_relpath(job.show, job.year, season, match.episode.number, match.episode_end,
                                match.version or job.version, title=match.episode.title, end_title=end_title,
                                quality=quality, scheme=scheme, show_dir=show_dir)

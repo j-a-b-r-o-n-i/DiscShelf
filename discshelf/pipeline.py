@@ -1,9 +1,9 @@
-"""The controller the GUI and CLI drive: scan → rip → match → copy → Plex, with jobs kept on disk.
+"""The controller the GUI and CLI drive: scan → rip → match → copy → media server scan, with jobs kept on disk.
 
 Every method blocks; the GUI runs them on worker threads. progress callbacks take
 (fraction 0..1, one-line status) and may be called from any thread.
 
-While rip() runs, finished titles are post-processed and copied to the NAS by one
+While rip() runs, finished titles are post-processed and copied to storage by one
 background worker, and the UI thread may call suggest_matches, update_matches and
 confirm_matches at the same time. Controller.job_lock guards a job's matches, files
 and titles_progress: this module holds it whenever it changes them, and the GUI holds
@@ -35,6 +35,9 @@ from . import nasfix, play, ripstats, scanwatch, season
 from .config import Config
 from .jobs import JobStore, now_iso
 from .models import Disc, Drive, EncodeJob, Episode, Job, Match, RippedFile, Sample, Span, Title, TitleProgress
+from . import mediaserver
+from .jellyfin import Jellyfin
+from .mediaserver import ServerError
 from .plex import Plex, PlexError
 from .tvmaze import TvMaze, TvMazeError
 
@@ -49,7 +52,7 @@ BLURAY_1X = 4.5e6          # bytes per second at 1× Blu-ray speed
 RIP_WINDOW = 20.0          # seconds the rip speed is averaged over; MakeMKV writes in 32 MB blocks
 RIP_SHARE = 0.9            # of the overall progress bar; the rest is what is left to do after the rip
 LOCKED_STATES = ("copying", "checking", "verified")      # the match can no longer change
-WAITING_STATES = ("ripped", "waiting_match", "skipped")  # ripped and not on the NAS: may be queued for copying
+WAITING_STATES = ("ripped", "waiting_match", "skipped")  # ripped and not in storage: may be queued for copying
 ENCODE_ACTIVE = ("waiting", "encoding", "paused", "checking", "copying")   # an AV1 version still to be made
 ENCODE_RUNNING = ("encoding", "checking", "copying")
 ENCODE_FINISHED = ("verified", "skipped")    # the remux may be deleted; a failed one keeps it until given up
@@ -327,8 +330,8 @@ class QueueItem:
     failed: list[tuple[int, str]]    # (title_index, why) copies that failed
     ready_to_copy: int           # titles matched and ready but not copied
     local_bytes: int             # size of this job's files still in its rip folder, AV1 versions included
-    safe_bytes: int              # of those, already verified on the NAS (a remux only once its AV1 version is done)
-    done_at: str                 # ISO time it reached Plex, "" if not (with AV1 versions: when the last one did)
+    safe_bytes: int              # of those, already verified in storage (a remux only once its AV1 version is done)
+    done_at: str                 # ISO time it was copied and checked, "" if not (with AV1 versions: when the last one did)
     encodes: list[EncodeJob] = field(default_factory=list)   # the job's AV1 versions, the live objects
 
 
@@ -347,7 +350,7 @@ class EncodeStatus:
 class SeasonEp:
     number: int
     title: str
-    state: str                   # "plex" (verified on the NAS) | "ripping" | "ripped" (not on the NAS yet) | "todo"
+    state: str                   # "plex" (verified in storage) | "ripping" | "ripped" (not in storage yet) | "todo"
     disc: int | None             # disc number it came from, when known
 
 
@@ -365,9 +368,9 @@ class SeasonView:
 @dataclass
 class QueueView:
     items: list[QueueItem]       # needs first, then working, then done (newest first within each)
-    seasons: list[SeasonView]    # seasons with some but not all episodes in Plex
+    seasons: list[SeasonView]    # seasons with some but not all episodes copied
     local_bytes: int             # everything in the rip folder (cfg.rip_path)
-    safe_bytes: int              # of that, verified on the NAS and safe to delete
+    safe_bytes: int              # of that, verified in storage and safe to delete
 
 
 DONE_HOURS = 24              # a finished disc stays in the queue this long, then only History shows it
@@ -375,6 +378,19 @@ RECENT_DAYS = 30             # only seasons touched this recently are looked up 
 EPISODES_RETRY = 300.0       # seconds before an episode list that failed to load (offline) is asked for again
 REVERIFY_NOTE = "Checked again"
 _STOPWORDS = {"the", "and", "of", "a", "an", "to", "in", "on", "for", "with"}
+
+
+def _still_ripping(run: "_Run") -> str:
+    if run.mode == "after":
+        return "This disc is still ripping. Copy it when the rip finishes."
+    return "This disc is still ripping; its titles are copied as each one finishes."
+
+
+def _match_next(n: int, tv: bool) -> str:
+    """The status after a rip whose titles still need matching."""
+    if not tv:
+        return f"Ripped {_plural(n, 'title')}. Check the match next."
+    return f"Ripped {_plural(n, 'title')}. Match {'it to an episode' if n == 1 else 'them to episodes'} next."
 
 
 def _plural(n: int, one: str, many: str | None = None) -> str:
@@ -477,7 +493,7 @@ class QueueViews:
         return QueueView(items=items, seasons=seasons, local_bytes=self._rip_folder_bytes(), safe_bytes=safe)
 
     def _safe_local(self, job: Job, f: RippedFile, check_nas: bool = False) -> bool:
-        """Whether the local rip of this file may be deleted: its NAS copy was verified, its AV1
+        """Whether the local rip of this file may be deleted: its copy in storage was verified, its AV1
         version (if any) is finished, and with check_nas the copy is still there at the same size."""
         if f.state != "verified" or f.local_deleted or not f.dest_rel or self._local_size(f) <= 0:
             return False
@@ -500,7 +516,7 @@ class QueueViews:
             return 0
 
     def _safe_av1(self, job: Job, e: EncodeJob, check_nas: bool = False) -> bool:
-        """Whether a local AV1 file may be deleted: its NAS copy was verified, and with check_nas
+        """Whether a local AV1 file may be deleted: its copy in storage was verified, and with check_nas
         the copy is still there at the same size."""
         if e.state != "verified" or e.local_deleted or not e.dest_rel or self._av1_size(e) <= 0:
             return False
@@ -529,7 +545,7 @@ class QueueViews:
         elif e.state == "checking":
             text = "Checking the quality of the AV1 version."
         elif e.state == "copying":
-            text = "Copying the AV1 version to the NAS."
+            text = "Copying the AV1 version to storage."
         elif e.note:
             text = e.note
         elif encoding - {job.id}:
@@ -616,7 +632,7 @@ class QueueViews:
             reason = (job.status or "Working…") if is_running else self._encode_line(job, encoding)
         else:
             verified = [f.title_index for f in job.files if f.state == "verified"]
-            reason = f"{self._what(job, verified, by)} copied to {job.library or 'the NAS'} and checked."
+            reason = f"{self._what(job, verified, by)} copied to {job.library or 'storage'} and checked."
             n_av1 = sum(1 for e in job.encodes if e.state == "verified")
             if n_av1:
                 reason += (" The AV1 version is next to it." if n_av1 == 1 and len(verified) == 1
@@ -665,9 +681,13 @@ class QueueViews:
         on_nas = sum(1 for ti in wanted if files.get(ti) and files[ti].state == "verified")
         parts = []
         if job.stage == "match" and not job.matches:
-            parts.append(f"Ripped {_plural(len(titles), 'title')}. Match them to episodes next.")
+            parts.append(_match_next(len(titles), tv))
         elif wanted and (len(wanted) > 1 or tv):
-            parts.append(f"{on_nas} of {len(wanted)} {'episodes' if tv else 'titles'} in Plex.")
+            server = mediaserver.name(self.cfg)
+            if server:
+                parts.append(f"{on_nas} of {len(wanted)} {'episodes' if tv else 'titles'} in {server}.")
+            else:
+                parts.append(f"{on_nas} of {len(wanted)} {'episodes' if tv else 'titles'} copied.")
         held = ""
         if any(m.held for m in job.matches) and hasattr(self, "season_others"):
             problems = season.find_problems(season.title_holders(job), self.season_others(job)[0],
@@ -743,7 +763,7 @@ class QueueViews:
 
     def _season_views(self, jobs: list[Job], running: set[str],
                       episodes: dict[int, list[Episode] | None]) -> list[SeasonView]:
-        """TV seasons with some but not all episodes in Plex. Hold job_lock."""
+        """TV seasons with some but not all episodes copied. Hold job_lock."""
         groups: dict[tuple[str, int], list[Job]] = {}
         for job in jobs:
             if self._layout(job) == "movie" or not job.show.strip() or job.season is None:
@@ -802,8 +822,11 @@ class QueueViews:
                 text = f"{_ranges(left)} {_isnt(len(left))} ripped yet."
             else:
                 k = len(eps) - in_plex
-                text = (f"Every episode is on a disc already ripped. {k} {_isnt(k)} "
-                        f"in Plex yet.")
+                server = mediaserver.name(self.cfg)
+                if server:
+                    text = f"Every episode is on a disc already ripped. {k} {_isnt(k)} in {server} yet."
+                else:
+                    text = f"Every episode is on a disc already ripped. {k} {_isnt(k)} copied yet."
             out.append(SeasonView(show=js[0].show, show_id=show_id, season=season, episodes=eps,
                                   in_plex=in_plex, next_disc=next_disc, next_text=text))
         return out
@@ -883,7 +906,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         self._busy: set[str] = set()                           # job ids with a copy or a re-check running
         self._show_eps: dict[int, tuple[float, list | None]] = {}   # show id → (when, every episode or None)
         self._show_dirs: dict[tuple, tuple[float, str]] = {}   # (destination, show, year) -> (when, folder)
-        self.plex_fetch = None                                 # plex.Fetch for tests; None uses the network
+        self.server_fetch = None                               # a fake HTTP fetch for tests; None uses the network
         # The AV1 encoder: one thread for the whole app, one encode at a time, in the order queued.
         self._enc_jobs: dict[str, Job] = {}                    # job id → the live Job of each disc with encodes to do
         self._enc_thread: threading.Thread | None = None
@@ -973,7 +996,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
     @classmethod
     def show_name(cls, disc_name: str, label: str = "") -> str:
         """The show or film name to start from: show_query's guess, with an all-caps disc
-        name ("ADVENTURE TIME") turned into "Adventure Time" for Plex and the search box."""
+        name ("ADVENTURE TIME") turned into "Adventure Time" for the media server and the search box."""
         name = cls.show_query(disc_name, label)
         return name.title() if name.isupper() else name
 
@@ -1071,7 +1094,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
     # --- rip ----------------------------------------------------------------
 
     def stream_possible(self, job: Job) -> tuple[bool, str]:
-        """Whether this job's film would be copied to the NAS while it rips, and if not, why in one sentence."""
+        """Whether this job's film would be copied to storage while it rips, and if not, why in one sentence."""
         tail = "so the film is copied after the rip."
         with self.job_lock:
             picked = [t for t in job.titles if t.selected]
@@ -1088,7 +1111,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             return False, f"The HDR setting isn't RAW, {tail}"
         supported = getattr(makemkv, "selection_supported", None)
         if not (supported and hasattr(makemkv, "selection_for") and supported(self.cfg)):
-            return False, f"This MakeMKV can't choose the languages during the rip, {tail}"
+            return False, f"This version of MakeMKV can't choose the languages during the rip, {tail}"
         if follow is None or not _rip_accepts("on_title_start"):
             return False, f"This version of Disc Shelf can't copy a file while MakeMKV writes it, {tail}"
         m = next((m for m in matches if m.title_index == picked[0].index), None) \
@@ -1098,7 +1121,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         if not job.show.strip():
             return False, f"The film has no name yet, {tail}"
         if not os.path.isdir(job.destination):
-            return False, f"{job.destination} isn't there (check that the NAS share is mounted), {tail}"
+            return False, f"{job.destination} isn't there (check that its drive or share is mounted), {tail}"
         return True, ""
 
     def rip(self, job: Job, progress: Progress, cancel: threading.Event,
@@ -1180,6 +1203,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         def ripping(f: float, _text: str) -> None:
             if not run.bytes_seen and total_size:
                 run.rip_meter.update(int(max(0.0, min(1.0, f)) * total_size))   # MakeMKV without on_bytes
+            if run.stream_done.is_set():
+                return      # the film is written; the copy check's own text is shown from here on
             run.emit(RIP_SHARE * f, rip_text(f))
 
         def on_title_start(ti: int, path: str) -> None:
@@ -1230,6 +1255,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 self._save(job)
             if mode == "stream":
                 run.stream_done.set()
+                run.emit(RIP_SHARE, "Ripped. Checking the copy of the film in storage…")
             else:
                 self._card_queue(run, ti, path)
                 run.q.put(("post", ti))
@@ -1277,7 +1303,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             raise
 
         self._rip_over(run)
-        run.emit(RIP_SHARE, "Ripped. Finishing the last title…")
+        if mode != "stream":
+            run.emit(RIP_SHARE, "Ripped. Finishing the last title…")
         if mode == "stream":
             self._stream_finish(run)
         self._end_run(run)
@@ -1333,7 +1360,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 del self._runs[run.job.id]
 
     def _settle(self, run: "_Run") -> None:
-        """The stage after a rip: done when every title is on the NAS (or skipped), else match."""
+        """The stage after a rip: done when every title is in storage (or skipped), else match."""
         job = run.job
         with self.job_lock:
             by = {m.title_index: m for m in job.matches}
@@ -1350,7 +1377,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 job.status = self._match_status(job, run, n, len(verified), waiting)
             self._save(job)
         if done:
-            text = self._scan_plex(job, verified)
+            text = self._scan_server(job, verified)
             with self.job_lock:
                 job.status, job.stage, job.progress = text, "done", 1.0
                 self._save(job)
@@ -1361,8 +1388,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         if run.mode == "stream" and run.copy_errors:
             return f"The film is ripped, but copying it while it ripped failed: {run.copy_errors[0][1]} Copy it again."
         if run.mode == "after" or (not on_nas and not run.copy_errors):
-            return f"Ripped {titles}. Match them to episodes next."
-        text = f"Ripped {titles}, and {on_nas} {'is' if on_nas == 1 else 'are'} on the NAS."
+            return _match_next(n, self._layout(job) != "movie")
+        text = f"Ripped {titles}, and {on_nas} {'is' if on_nas == 1 else 'are'} in storage."
         if waiting:
             text += f" {waiting} {'waits' if waiting == 1 else 'wait'} for a match to be confirmed."
         if run.copy_errors:
@@ -1432,7 +1459,9 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         if not job.hdr_policy.is_raw and info.dolby_vision:
             self._say(run, 0.5, f"Applying the HDR setting to title {ti}")
             hdr.apply_policy(path, job.hdr_policy, info, workdir, self.cfg)
+            layer = info.dv_layer_kind
             info = hdr.probe(path, self.cfg)
+            info.dv_layer_kind = layer      # the disc's layer, which says whether the conversion lost anything
             converted = True
         size = os.path.getsize(path)
         with self.job_lock:
@@ -1605,7 +1634,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
     # --- watching a title ----------------------------------------------------
 
     def playable(self, job: Job, ti: int) -> str:
-        """A file that plays this title: the local rip, else its checked copy on the NAS; "" before it's ripped."""
+        """A file that plays this title: the local rip, else its checked copy in storage; "" before it's ripped."""
         return play.playable(job, ti)
 
     def play(self, path: str, start_s: float = 0.0) -> str:
@@ -1631,7 +1660,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         if not files:
             raise ValueError("No ripped titles are left on this computer to read.")
         if not ocr.engine():
-            raise RuntimeError("No OCR is installed. Run make install-disc-shelf to add it.")
+            raise RuntimeError(ocr.missing_text())
         with self.job_lock:
             if only is None:
                 self._cards.pop(job.id, None)
@@ -1737,9 +1766,9 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                     tp.copied_bytes, tp.checked_bytes, tp.copy_rate = c, checked, rate
                 size = f.size_bytes
             run.copy_meter.update(c)
-            if run.rip_over and size:
+            if run.stream_done.is_set() and size:
                 run.emit(RIP_SHARE + (1 - RIP_SHARE) * min(1.0, checked / size),
-                         f"Checking the last parts of the film · {_of(checked, size)}")
+                         f"Checking the copy of the film in storage · {_of(checked, size)}")
 
         def go() -> None:
             try:
@@ -1772,7 +1801,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             except OSError:
                 ok = False
             if not ok:
-                err = RuntimeError(f"The NAS copy of {os.path.basename(dest)} is a different size from the rip.")
+                err = RuntimeError(f"The copy of {os.path.basename(dest)} in storage is a different size from the rip.")
         try:
             info = hdr.probe(f.path, self.cfg)
         except Exception:
@@ -1813,7 +1842,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         return done
 
     def suggest_matches(self, job: Job, show_id: int | None) -> list[Match]:
-        """Works before, during and after the rip; titles already on the NAS keep their match."""
+        """Works before, during and after the rip; titles already in storage keep their match."""
         with self.job_lock:
             # During a rip only some files exist yet, so the rip's own list of titles decides.
             chosen = {tp.title_index for tp in job.titles_progress} or {f.title_index for f in job.files}
@@ -1880,7 +1909,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         return caseocr.episode_list_from_photo(path, self.tvmaze.episodes(show_id, None))
 
     def update_matches(self, job: Job, matches: list[Match]) -> list[Match]:
-        """Replace the job's matches. A title being copied or already on the NAS keeps the match it was copied under."""
+        """Replace the job's matches. A title being copied or already in storage keeps the match it was copied under."""
         with self.job_lock:
             locked = self._locked(job)
             frozen = self._frozen.get(job.id, {})
@@ -1921,7 +1950,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             self._frozen.setdefault(job.id, {})[ti] = _copy.deepcopy(m)
 
     def _dest_map(self, job: Job, strict: bool) -> dict[int, str | None]:
-        """title_index → path under the destination. Paths already used on the NAS are kept and
+        """title_index → path under the destination. Paths already used in storage are kept and
         never handed to another title. strict=False gives None instead of raising when a name can't be made."""
         layout = self._layout(job)
         fixed = {f.title_index: f.dest_rel for f in job.files
@@ -1974,18 +2003,18 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             paths = self._dest_map(job, strict=False)
             return [(m.title_index, paths[m.title_index]) for m in job.matches if paths.get(m.title_index)]
 
-    # --- copy and Plex ------------------------------------------------------
+    # --- copy and scan -------------------------------------------------------
 
     def _copy_one(self, job: Job, f: RippedFile, cancel: threading.Event | None, meter: "_Meter | None",
                   step: Callable[[str, float, str], None] | None) -> None:
-        """Copy one file to the NAS and check it, keeping its TitleProgress and state up to date.
+        """Copy one file to storage and check it, keeping its TitleProgress and state up to date.
         step(phase "copy" | "check", fraction of this file, text) reports progress. Raises on failure."""
         with self.job_lock:
             if not os.path.isdir(job.destination):
-                raise FileNotFoundError(f"{job.destination} isn't there. Check that the NAS share is mounted.")
+                raise FileNotFoundError(f"{job.destination} isn't there. Check that its drive or share is mounted.")
             rel = self._dest_map(job, strict=True).get(f.title_index)
             if not rel:
-                raise ValueError(f"Title {f.title_index} isn't matched to anything, so it has no name on the NAS.")
+                raise ValueError(f"Title {f.title_index} isn't matched to anything, so it has no name in storage.")
             tp = _tp(job, f.title_index)
             if tp is None:
                 tp = TitleProgress(f.title_index, total_bytes=f.size_bytes, ripped_bytes=f.size_bytes)
@@ -2035,7 +2064,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         with self.job_lock:
             if not ok:
                 f.state, tp.state = "failed", "failed"
-                tp.note = f"The NAS copy of {os.path.basename(dest)} doesn't match. Copy it again."
+                tp.note = f"The copy of {os.path.basename(dest)} in storage doesn't match. Copy it again."
                 self._save(job)
                 raise RuntimeError(tp.note)
             f.state, tp.state, tp.checked_bytes = "verified", "verified", size
@@ -2046,7 +2075,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
              samples: Callable[[Sample], None] | None = None) -> None:
         with self.job_lock:
             if job.id in self._runs:
-                raise RuntimeError("This disc is still ripping; its titles are copied as each one finishes.")
+                raise RuntimeError(_still_ripping(self._runs[job.id]))
             files = self.plan_paths(job)
             todo = [f for f in files if f.state != "verified"]
             held = [m for m in job.matches if m.held and any(f.title_index == m.title_index for f in todo)]
@@ -2056,18 +2085,18 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         if not files:
             raise ValueError("Nothing to copy. Match at least one title to an episode, the film or an extra.")
         if todo and not os.path.isdir(job.destination):
-            raise FileNotFoundError(f"{job.destination} isn't there. Check that the NAS share is mounted.")
+            raise FileNotFoundError(f"{job.destination} isn't there. Check that its drive or share is mounted.")
         self._copy_files(job, todo, progress, cancel, samples)
         self._finish(job, files, progress)
 
     def copy_ready(self, job: Job, progress: Progress, cancel: threading.Event,
                    samples: Callable[[Sample], None] | None = None) -> int:
-        """After the rip: copy the titles whose match is ready and that aren't on the NAS yet, and
+        """After the rip: copy the titles whose match is ready and that aren't in storage yet, and
         failed ones again. Titles waiting for a check are left alone, and the job stays in "match"
         until they're settled. Returns how many files were copied."""
         with self.job_lock:
             if job.id in self._runs:
-                raise RuntimeError("This disc is still ripping; its titles are copied as each one finishes.")
+                raise RuntimeError(_still_ripping(self._runs[job.id]))
             paths = self._dest_map(job, strict=False)
             by = {m.title_index: m for m in job.matches}
             todo = []
@@ -2086,7 +2115,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 todo.append(f)
             self._save(job)
         if todo and not os.path.isdir(job.destination):
-            raise FileNotFoundError(f"{job.destination} isn't there. Check that the NAS share is mounted.")
+            raise FileNotFoundError(f"{job.destination} isn't there. Check that its drive or share is mounted.")
         if todo:
             self._copy_files(job, todo, progress, cancel, samples)
         with self.job_lock:
@@ -2101,7 +2130,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                     text += (f" {checks} {'waits' if checks == 1 else 'wait'} for you to check "
                              f"{'its match' if checks == 1 else 'their matches'}.")
                 elif left:
-                    text += f" {_plural(len(left), 'title')} still {_isnt(len(left))} on the NAS."
+                    text += f" {_plural(len(left), 'title')} still {_isnt(len(left))} in storage."
                 job.stage, job.progress, job.status = "match", 1.0, text
                 self._save(job)
         if left or not verified:
@@ -2114,7 +2143,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                     samples: Callable[[Sample], None] | None) -> None:
         """Copy these files in turn under one progress bar. Raises what _copy_one raises."""
         with self.job_lock:
-            job.stage, job.status, job.dismissed = "copy", "Copying to the NAS…", False
+            job.stage, job.status, job.dismissed = "copy", "Copying to storage…", False
             for f in todo:
                 tp = _tp(job, f.title_index)
                 if tp:
@@ -2157,35 +2186,34 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 self._busy.discard(job.id)
 
     def _finish(self, job: Job, files: list[RippedFile], progress: Progress) -> None:
-        """Every title is on the NAS: ask Plex to scan, and the job is done."""
+        """Every title is in storage: ask the media server to scan, and the job is done."""
         with self.job_lock:
             job.stage, job.copied_at = "plex", now_iso()
             job.status = "Copied and checked."
             self._save(job)
-        text = self._scan_plex(job, files)
+        text = self._scan_server(job, files)
         with self.job_lock:
             job.status, job.stage, job.progress = text, "done", 1.0
             self._save(job)
         progress(1.0, job.status)
 
-    def _scan_plex(self, job: Job, files: list[RippedFile]) -> str:
-        if not job.library:
+    def _scan_server(self, job: Job, files: list[RippedFile]) -> str:
+        """Ask the media server to scan the new folder. Returns the job's status sentence."""
+        server, why = mediaserver.connect(self.cfg, self.server_fetch)
+        if not job.library or (server is None and not why):
             return "Copied and checked."
-        if not self.cfg.plex_url:
-            return "Copied and checked. Add your Plex server in Settings so new rips are scanned automatically."
-        token = config.load_secret("plex_token")
-        if not token:
-            return "Copied and checked. Sign in to Plex in Settings so new rips are scanned automatically."
+        if server is None:
+            return f"Copied and checked. {why}"
         try:
-            plex = Plex(self.cfg.plex_url, token, fetch=self.plex_fetch)
-            section = plex.section(job.library)
+            section = server.section(job.library)
             if not section:
-                return f"Copied and checked. Plex has no library called “{job.library}”, so nothing was scanned."
+                return (f"Copied and checked. {server.name} has no library called “{job.library}”, "
+                        "so nothing was scanned.")
             top = files[0].dest_rel.split("/")[0]
-            plex.refresh(section["key"], plex.plex_path(section, top))
-            return f"Copied and checked. Plex is scanning {top} into {job.library}."
-        except PlexError as e:
-            return f"Copied and checked, but Plex couldn't be asked to scan: {e}"
+            server.refresh(section["key"], server.server_path(section, top))
+            return f"Copied and checked. {server.name} is scanning {top} into {job.library}."
+        except ServerError as e:
+            return f"Copied and checked, but {server.name} couldn't be asked to scan: {e}"
 
     def recover_titles(self) -> list[tuple[Job, list[int]]]:
         """Put back ripped titles a job lost track of: a title whose own "<disc>_tNN.mkv" is in the
@@ -2217,7 +2245,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             if found:
                 job.files.sort(key=lambda f: f.title_index)
                 n = len(job.files)
-                job.status = f"Ripped {n} title{'s' if n != 1 else ''}. Match them to episodes next."
+                job.status = _match_next(n, self._layout(job) != "movie")
                 if job.stage == "failed" and len(job.files) == len(job.titles_progress):
                     job.stage = "match"
                 self._save(job)
@@ -2226,7 +2254,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
 
     def cleanup(self, apply: bool = True) -> list[str]:
         """Delete the local rips the clean-up setting says are due. Uses free_local's rule: only a
-        file whose NAS copy was verified and is still there at the same size."""
+        file whose copy in storage was verified and is still there at the same size."""
         removed = []
         for job in self.jobs():
             if job.stage != "done" or not job.copied_at or job.id in self._runs or job.id in self._busy:
@@ -2321,7 +2349,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
 
     def confirm_title(self, job: Job, title_index: int, episode: Episode) -> None:
         """Match one title to this episode and confirm it. During a per-title rip it's copied as soon
-        as it's ripped; a title already on the NAS keeps its match."""
+        as it's ripped; a title already in storage keeps its match."""
         with self.job_lock:
             matches = _copy.deepcopy(job.matches)
             m = next((m for m in matches if m.title_index == title_index), None)
@@ -2348,12 +2376,12 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 if e.state == "failed":
                     _remove_av1_files(e)
                     e.state, e.encoded = "skipped", False
-                    e.note = (e.note + " It was given up, so the remux is kept as it is.").strip()
+                    e.note = (e.note + " It won't be tried again, so the remux stays as it is.").strip()
             job.dismissed = True
             self._save(job)
 
     def free_local(self, job: Job | None = None) -> int:
-        """Delete local rips already verified on the NAS (and still there at the same size), for one
+        """Delete local rips already verified in storage (and still there at the same size), for one
         job or every job. A file that isn't verified is never deleted. Returns the bytes freed."""
         freed = 0
         for j in [job] if job is not None else self.jobs():
@@ -2374,7 +2402,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         return freed
 
     def nas_folder(self, job: Job) -> str:
-        """The folder on the NAS mount the job's files went to: the season folder, or the film's."""
+        """The folder in storage the job's files went to: the season folder, or the film's."""
         with self.job_lock:
             rels = [f.dest_rel for f in job.files if f.dest_rel]
         if not rels:
@@ -2395,13 +2423,13 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         return os.path.join(job.destination, folder) if folder else job.destination
 
     def reverify(self, job: Job, progress: Progress) -> list[str]:
-        """Read every NAS copy back and compare it with the checksum taken when it was copied (or
+        """Read every copy in storage back and compare it with the checksum taken when it was copied (or
         the local rip when there is none). Returns one sentence per copy that is missing or
         different, [] when all match. Those are marked failed, so the queue offers to copy them again."""
         if not os.path.isdir(job.destination):
-            raise FileNotFoundError(f"{job.destination} isn't there. Check that the NAS share is mounted.")
+            raise FileNotFoundError(f"{job.destination} isn't there. Check that its drive or share is mounted.")
         with self.job_lock:
-            # A failed one with a checksum is read too: if its NAS copy matches after all, it's good again.
+            # A failed one with a checksum is read too: if its copy in storage matches after all, it's good again.
             files = [f for f in job.files if f.dest_rel and (f.state in ("verified", "copied")
                                                             or (f.state == "failed" and f.sha256))]
             by = {m.title_index: m for m in job.matches}
@@ -2421,8 +2449,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 try:
                     size = os.path.getsize(dest)
                 except OSError:
-                    problems.append(f"The NAS copy of {label} is missing.")
-                    bad.append((f, f"{REVERIFY_NOTE}, and its NAS copy is missing."))
+                    problems.append(f"The copy of {label} in storage is missing.")
+                    bad.append((f, f"{REVERIFY_NOTE}, and its copy in storage is missing."))
                     done += f.size_bytes
                     continue
                 want = f.sha256
@@ -2435,8 +2463,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 else:
                     ok = True       # no checksum and no local copy: the size is all there is to compare
                 if not ok:
-                    problems.append(f"The NAS copy of {label} doesn't match the rip.")
-                    bad.append((f, f"{REVERIFY_NOTE}, and its NAS copy doesn't match the rip."))
+                    problems.append(f"The copy of {label} in storage doesn't match the rip.")
+                    bad.append((f, f"{REVERIFY_NOTE}, and its copy in storage doesn't match the rip."))
                 elif f.state == "failed":
                     good.append(f)
                 done += f.size_bytes
@@ -2458,44 +2486,39 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                     tp.state, tp.note = "verified", ""
             if bad:
                 job.dismissed = False
-                job.status = f"{_plural(len(bad), 'NAS copy', 'NAS copies')} of {len(files)} need copying again."
+                job.status = f"{len(bad)} of {_plural(len(files), 'copy', 'copies')} in storage {'needs' if len(bad) == 1 else 'need'} copying again."
             else:
-                job.status = f"Checked again: all {_plural(len(files), 'NAS copy', 'NAS copies')} match the rip."
+                job.status = f"Checked again: all {_plural(len(files), 'copy', 'copies')} in storage match the rip."
             self._save(job)
         progress(1.0, job.status)
         return problems
 
-    def plex_link(self, job: Job) -> str:
-        """Plex Web's page for this film, show or season when Plex can find it, else Plex Web's
-        home page. Never raises: offline, signed out or not found all give the home page."""
-        if not self.cfg.plex_url:
-            return "https://app.plex.tv/desktop"      # Plex's own web app finds the user's servers
-        root = f"{self.cfg.plex_url.rstrip('/')}/web/index.html"
+    def server_link(self, job: Job) -> str:
+        """The media server's web page for this film, show or season when the server can find it,
+        else its home page, or "" with no media server. Never raises: offline, signed out or not
+        found all give the home page."""
+        root = mediaserver.home_url(self.cfg)
         try:
-            token = config.load_secret("plex_token")
-            if not token or not job.library or not job.show.strip():
+            server, _ = mediaserver.connect(self.cfg, self.server_fetch)
+            if server is None or not job.library or not job.show.strip():
                 return root
-            plex = Plex(self.cfg.plex_url, token, fetch=self.plex_fetch)
-            section = plex.section(job.library)
+            section = server.section(job.library)
             if not section:
                 return root
-            item = plex.find(section["key"], job.show, job.year)
-            if not item or not item.get("ratingKey"):
+            key = server.find_key(section["key"], job.show, job.year)
+            if not key:
                 return root
-            key = str(item["ratingKey"])
             if self._layout(job) != "movie" and job.season is not None:
-                season = plex.season(key, job.season)
-                if season and season.get("ratingKey"):
-                    key = str(season["ratingKey"])
-            return plex.web_url(plex.identity(), key)
+                key = server.season_key(key, job.season) or key
+            return server.link(key)
         except Exception:  # noqa: BLE001 -- a link is never worth an error dialog
             return root
 
     # --- the AV1 second version ---------------------------------------------
-    # After a 4K title's remux is verified on the NAS, an EncodeJob is queued for it. One encoder
+    # After a 4K title's remux is verified in storage, an EncodeJob is queued for it. One encoder
     # thread for the whole app takes them in the order queued: encode (av1.encode, at low
     # priority), check the quality (av1.check_quality), copy next to the remux and check the copy,
-    # ask Plex to scan, and record the time and size for the estimates. It never holds job_lock
+    # ask the media server to scan, and record the time and size for the estimates. It never holds job_lock
     # while a tool runs, and never touches the drive.
 
     def _av1_wanted(self, job: Job) -> bool:
@@ -2513,7 +2536,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         return f"The AV1 version of {_title_label(ti, m)}"
 
     def _queue_encode(self, job: Job, f: RippedFile) -> bool:
-        """Queue the AV1 version of a title whose remux was just verified on the NAS, when it's a 4K
+        """Queue the AV1 version of a title whose remux was just verified in storage, when it's a 4K
         title and this disc wants one. Hold job_lock. Returns whether one was queued."""
         if f.state != "verified" or not f.dest_rel or not f.path or not self._av1_wanted(job):
             return False
@@ -2649,8 +2672,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 e.state, e.note, e.finished = "verified", "", now_iso()
                 self._save(job)
             try:
-                self._scan_plex(job, [e])
-            except Exception:  # noqa: BLE001 -- the copy is verified; Plex finds it on its next scan anyway
+                self._scan_server(job, [e])
+            except Exception:  # noqa: BLE001 -- the copy is verified; the media server finds it on its next scan anyway
                 pass
             if e.seconds > 0:
                 try:
@@ -2662,7 +2685,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 _remove_av1_files(e)
                 e.state, e.encoded, e.held, e.finished = "skipped", False, False, now_iso()
                 e.fps, e.eta_seconds = 0.0, None
-                e.note = "Stopped. The remux stays in Plex as it is."
+                e.note = "Stopped. The remux stays in storage as it is."
                 self._save(job)
         except Exception as x:  # noqa: BLE001 -- shown on the queue card; the encoder carries on with the next
             with self.job_lock:
@@ -2741,9 +2764,9 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 self._save(job)
 
     def _copy_av1(self, job: Job, e: EncodeJob, cancel: threading.Event) -> None:
-        """Copy the AV1 file next to the remux on the NAS and check it the way remuxes are checked."""
+        """Copy the AV1 file next to the remux in storage and check it the way remuxes are checked."""
         if not os.path.isdir(job.destination):
-            raise FileNotFoundError(f"{job.destination} isn't there. Check that the NAS share is mounted.")
+            raise FileNotFoundError(f"{job.destination} isn't there. Check that its drive or share is mounted.")
         dest = os.path.join(job.destination, e.dest_rel)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         transfer.copy(e.path, dest, lambda _f, _t: None, cancel)
@@ -2752,7 +2775,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             with self.job_lock:
                 e.sha256 = digest
         if not transfer.verify(e.path, dest, self.cfg.verify, e.sha256 or None, None):
-            raise RuntimeError(f"the NAS copy of {os.path.basename(dest)} doesn't match. Choose Encode AV1 again "
+            raise RuntimeError(f"the copy of {os.path.basename(dest)} in storage doesn't match. Choose Encode AV1 again "
                                "to copy it again.")
 
     def _stats(self) -> "av1.Stats":
@@ -2837,7 +2860,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 elif e.state in ("waiting", "paused", "failed"):
                     _remove_av1_files(e)
                     e.state, e.held, e.encoded, e.finished = "skipped", False, False, now_iso()
-                    e.note = "Skipped. The remux stays in Plex as it is."
+                    e.note = "Skipped. The remux stays in storage as it is."
                     changed = True
             if changed:
                 self._save(job)
@@ -2922,7 +2945,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             self._kick_encoder()
         return out
 
-    # --- Plex sign-in -------------------------------------------------------
+    # --- media server sign-in -------------------------------------------------------
 
     def plex_sign_in_start(self) -> tuple[int, str, str]:
         pin_id, code, url = Plex(self.cfg.plex_url, "").pin_start()
@@ -2936,27 +2959,39 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             return True
         return False
 
-    def plex_signed_in(self) -> bool:
-        return bool(config.load_secret("plex_token"))
+    def server_signed_in(self) -> bool:
+        return mediaserver.signed_in(self.cfg)
 
-    def plex_scan_folder(self, library: str, rel: str) -> str:
-        """Ask Plex to scan one folder of a library; rel is under the destination folder. Returns
-        a sentence for the Library page. Raises PlexError when Plex can't be asked."""
-        token = config.load_secret("plex_token")
-        if not library or not self.cfg.plex_url or not token:
-            return "Plex wasn't asked to scan: sign in to Plex and choose its library for this destination in Settings."
-        plex = Plex(self.cfg.plex_url, token, fetch=self.plex_fetch)
-        section = plex.section(library)
+    def load_secret(self, name: str) -> str:
+        return config.load_secret(name)
+
+    def save_secret(self, name: str, value: str) -> None:
+        config.save_secret(name, value)
+
+    def server_scan_folder(self, library: str, rel: str) -> str:
+        """Ask the media server to scan one folder of a library; rel is under the destination
+        folder. Returns a sentence for the Library page, "" with no media server. Raises
+        ServerError when the server can't be asked."""
+        server, why = mediaserver.connect(self.cfg, self.server_fetch)
+        if server is None:
+            return why
+        if not library:
+            return f"{server.name} wasn't asked to scan: choose its library for this destination in Settings."
+        section = server.section(library)
         if not section:
-            raise PlexError(f"Plex has no library called “{library}”. Choose the right one in Settings.")
-        plex.refresh(section["key"], plex.plex_path(section, rel))
-        return f"Plex is scanning {rel}."
+            raise ServerError(f"{server.name} has no library called “{library}”. Choose the right one in Settings.")
+        server.refresh(section["key"], server.server_path(section, rel))
+        return f"{server.name} is scanning {rel}."
 
-    def plex_libraries(self) -> list[str]:
-        token = config.load_secret("plex_token")
-        if not token:
+    def jellyfin_test(self, url: str, key: str) -> str:
+        """The server's name when url and key work. Raises ServerError with what went wrong."""
+        return Jellyfin(url, key, fetch=self.server_fetch).server_name()
+
+    def server_libraries(self) -> list[str]:
+        server, _ = mediaserver.connect(self.cfg, self.server_fetch)
+        if server is None:
             return []
         try:
-            return [s["title"] for s in Plex(self.cfg.plex_url, token).sections()]
-        except PlexError:
+            return [sec["title"] for sec in server.sections()]
+        except ServerError:
             return []

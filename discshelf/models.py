@@ -83,15 +83,29 @@ class HdrPolicy:
     keep: str = "all"            # "all": every HDR format as on the disc | "hdr10": drop Dolby Vision
     convert_p81: bool = False    # rewrite Dolby Vision profile 7 as 8.1 (drops a full enhancement layer)
 
-    def raw_reasons(self) -> list[str]:
-        """Each setting that changes the HDR from what is on the disc. Empty means RAW."""
+    def raw_reasons(self, layer_kind: str | None = None) -> list[str]:
+        """Each setting that changes the HDR from what is on the disc. Empty means RAW.
+        layer_kind is the disc's Dolby Vision enhancement layer ("FEL" | "MEL"), once known."""
         out = []
         if self.keep != "all":
             out.append("“Keep HDR10 only” is selected, so the Dolby Vision layer is dropped.")
         if self.convert_p81 and self.keep == "all":
-            out.append("“Convert Dolby Vision to profile 8.1” is on, so Dolby Vision is rewritten "
-                       "and a full enhancement layer is lost.")
+            out.append({"MEL": "“Convert Dolby Vision to profile 8.1” is on. This disc's enhancement layer "
+                               "holds no picture, so nothing is lost.",
+                        "FEL": "“Convert Dolby Vision to profile 8.1” is on, so this disc's full enhancement "
+                               "layer is lost."}.get(layer_kind or "",
+                       "“Convert Dolby Vision to profile 8.1” is on, so a full enhancement layer is lost "
+                       "if the disc has one. That is checked after the rip."))
         return out
+
+    def compression(self, layer_kind: str | None = None) -> str:
+        """"raw", "lossless" or "lossy": what the setting does to the main file's picture. A
+        conversion counts as lossy until the rip shows the disc's layer holds no picture (MEL)."""
+        if self.keep != "all":
+            return "lossy"
+        if self.convert_p81:
+            return "lossless" if layer_kind == "MEL" else "lossy"
+        return "raw"
 
     @property
     def is_raw(self) -> bool:
@@ -217,13 +231,13 @@ class Job:
     audio_langs: list[str] = field(default_factory=list)
     subtitle_langs: list[str] = field(default_factory=list)
     media_kind: str = "tv"       # a Destination.kind: "tv" | "movie" | "anime" | user-defined
-    show: str = ""               # show or film name as Plex should see it
+    show: str = ""               # show or film name as the media server should see it
     show_id: int | None = None   # TVmaze show id once the show is chosen
     year: int | None = None
     season: int | None = None
     disc_number: int | None = None
-    destination: str = ""        # local path of the NAS folder, e.g. /mnt/nas/Shows
-    library: str = ""            # Plex library to scan afterwards, "" for none
+    destination: str = ""        # local path of the destination folder, e.g. /mnt/media/Shows
+    library: str = ""            # the media server library to scan afterwards, "" for none
     version: str = ""            # "" or a version tag such as "2160p" / "1080p"
     rip_dir: str = ""
     titles: list[Title] = field(default_factory=list)

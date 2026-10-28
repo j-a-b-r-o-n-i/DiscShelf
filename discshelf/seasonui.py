@@ -167,7 +167,7 @@ class CompareTitle:
     key: str                     # "here:6", "side:0"
     title_index: int | None      # on this disc, else None
     label: str                   # "Title 27", "Disc 1, First Half, title 26"
-    sub: str                     # "00034.m2ts · 7:14 · 1.0 GB", or its file name on the NAS
+    sub: str                     # "00034.m2ts · 7:14 · 1.0 GB", or its file name in storage
     rows: list[tuple[str, str, str]] = field(default_factory=list)   # (caption, value, colour or "")
     path: str = ""               # a file that plays it, "" when none yet
     card_t: float | None = None  # seconds in where its title card names the episode
@@ -182,7 +182,7 @@ class FixOption:
     label: str                   # "Keep title 26 as the French version (suggested)"
     what: str                    # what happens, in a sentence or two
     apply: str = ""              # the apply button's text when it's chosen: "Rename 1 file"
-    changes: list[tuple[str, str]] = field(default_factory=list)   # (old, new) on the NAS, new "" when deleted
+    changes: list[tuple[str, str]] = field(default_factory=list)   # (old, new) in storage, new "" when deleted
     note: str = ""               # replaces the view's note beside the apply button
 
 
@@ -263,7 +263,7 @@ class ComparePanel(QFrame):
         cl = QVBoxLayout(self.change_box)
         cl.setContentsMargins(0, 10, 0, 0)
         cl.setSpacing(4)
-        cl.addWidget(_label("What changes on the NAS", "small"))
+        cl.addWidget(_label("What changes in storage", "small"))
         self.change_lines = QLabel("")
         self.change_lines.setTextFormat(Qt.TextFormat.RichText)
         self.change_lines.setWordWrap(True)

@@ -174,6 +174,42 @@ def run():
         check(open(dst4, "rb").read() == open(src, "rb").read(), "copy of a shrunk file is not identical")
         check(res.bytes == 25_000, f"shrunk size: {res.bytes}")
 
+        # MakeMKV changes a few bytes in every chunk when it finishes: only those pieces are resent.
+        old_piece, follow.PIECE = follow.PIECE, 512
+        try:
+            src5 = os.path.join(tmp, "rip", "patched.mkv")
+            dst5 = os.path.join(tmp, "nas", "patched.mkv")
+            with open(src5, "wb") as fh:
+                fh.write(b"".join(bursts(8, CHUNK, seed=3)))
+            done = threading.Event()
+            late = []
+            patched = threading.Event()
+
+            def late_open(path, mode="r"):
+                fh = open(path, mode)
+                if "+" in mode or "w" in mode:
+                    orig = fh.write
+                    fh.write = lambda b: (late.append(len(b)) if patched.is_set() else None, orig(b))[1]
+                return fh
+            box = {}
+            t = threading.Thread(target=lambda: box.update(res=follow.stream_copy(
+                src5, dst5, done, lambda *a: None, chunk=CHUNK, poll=0.005, opener=late_open)))
+            t.start()
+            while not os.path.exists(dst5 + ".partial") or os.path.getsize(dst5 + ".partial") < 8 * CHUNK:
+                time.sleep(0.005)
+            with open(src5, "r+b") as fh:
+                for k in range(8):
+                    fh.seek(k * CHUNK + 100)
+                    fh.write(b"\xAB\xCD")
+            patched.set()
+            done.set()
+            t.join()
+            check(open(dst5, "rb").read() == open(src5, "rb").read(), "patched copy is not identical")
+            check(sum(late) == 8 * 512, f"resent {sum(late)} bytes for 8 two-byte patches, not 8 pieces of 512")
+            check(box["res"].chunks_resent == 8, f"chunks resent: {box['res'].chunks_resent}")
+        finally:
+            follow.PIECE = old_piece
+
     for f in failures:
         print("FAIL:", f)
     print(f"follow: {'ok' if not failures else f'{len(failures)} failure(s)'}")

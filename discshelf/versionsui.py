@@ -107,13 +107,13 @@ class VersionsPanel(QFrame):
             row.addStretch(1)
             b.addLayout(row)
         if group.langs:
-            b.addWidget(_label("Different: the languages. Each row is one language, with its audio and subtitle "
+            b.addWidget(_label("The languages differ. Each row is one language, with its audio and subtitle "
                                "tracks.", "field", wrap=True))
             b.addWidget(self._lang_table(group, selected))
         if group.strips:
             b.addWidget(_label("Each bar is one title, piece by piece. Orange pieces are "
                                + ("only in that title." if group.kind == "cut" else "in a different place than in "
-                                  f"{group.pick.source or 'the pick'}."), "field", wrap=True))
+                                  f"{group.pick.source or 'the picked title'}."), "field", wrap=True))
             grid = QGridLayout()
             grid.setHorizontalSpacing(12)
             grid.setVerticalSpacing(STRIP_GAP)

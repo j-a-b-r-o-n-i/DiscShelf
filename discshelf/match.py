@@ -140,7 +140,7 @@ def _flag_order(ep_titles: list[Title], matches: dict[int, Match], episodes: lis
         best = min(others, key=lambda e: (_err(mins, e.runtime_min), e.number))
         m.confidence = "check"
         # Replaces the length note: a likely swap is the more useful thing to say.
-        m.note = f"Order unclear: the running time also fits {_ep_label(best)}."
+        m.note = f"The order is unclear: the running time also fits {_ep_label(best)}."
 
 
 def _words(s: str) -> list[str]:

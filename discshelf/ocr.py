@@ -174,6 +174,14 @@ def _tesseract(paths: list[str], run) -> list[list[OcrLine]]:
     return out
 
 
+def missing_text() -> str:
+    """What to tell the user when no text reader is installed, and how to get one."""
+    if os.path.exists("/.flatpak-info"):
+        return "This copy of Disc Shelf is missing its text reader. Reinstall Disc Shelf to add it back."
+    return ("No text reader is installed. Install tesseract with your package manager, "
+            "or RapidOCR with: pip install 'disc-shelf[ocr]'.")
+
+
 def read_images(paths: list[str], run=subprocess.run) -> list[list[OcrLine]]:
     """The text lines on each image, one list per image in the order given."""
     if not paths:
@@ -187,9 +195,7 @@ def read_images(paths: list[str], run=subprocess.run) -> list[list[OcrLine]]:
             if not shutil.which("tesseract"):
                 raise
     elif not shutil.which("tesseract"):
-        if os.path.exists("/.flatpak-info"):
-            raise OcrError("This copy of Disc Shelf is missing its text reader; reinstall it from Flathub.")
-        raise OcrError("No OCR engine is installed; run make install-disc-shelf to add RapidOCR and tesseract.")
+        raise OcrError(missing_text())
     return _tesseract(paths, run)
 
 

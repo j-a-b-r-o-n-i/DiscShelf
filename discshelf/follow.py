@@ -1,11 +1,12 @@
-"""Copy a file to the NAS while MakeMKV is still writing it.
+"""Copy a file to storage while MakeMKV is still writing it.
 
 A film is one 30-70 GB file, so copying it only after the rip adds most of an hour.
 This copier follows the growing file instead: each whole chunk is sent once the source
-has grown past it, flushed, read back through the mount and compared. MakeMKV rewrites
-the start of the file (and possibly other parts) when it finishes, so once the rip is
-done every chunk is hashed again and any that changed is sent again. The copy sits
-under "<name>.partial" until all of that has checked out, so Plex never sees half a file.
+has grown past it, flushed, read back through the mount and compared. When it finishes,
+MakeMKV rewrites the start of the file and a few bytes in almost every chunk, so once the
+rip is done every chunk is hashed again and only the 1 MB pieces that changed are sent
+again. The copy sits under "<name>.partial" until all of that has checked out, so a media
+server never sees half a file.
 """
 from __future__ import annotations
 
@@ -21,12 +22,13 @@ from .transfer import Cancelled, CopyError
 FollowProgress = Callable[[int, int, float], None]
 
 PARTIAL_SUFFIX = ".partial"
-GIVE_UP_S = 300.0            # a NAS that stays unreachable this long is reported, not waited on
+GIVE_UP_S = 300.0            # storage that stays unreachable this long is reported, not waited on
 MAX_BACKOFF_S = 30.0
+PIECE = 1024 * 1024          # when the rip is done, a changed chunk is resent only in the pieces that differ
 
 
 class FollowError(CopyError):
-    """The NAS copy could not be completed; the message says why."""
+    """The copy in storage could not be completed; the message says why."""
 
 
 @dataclass
@@ -35,6 +37,10 @@ class FollowResult:
     chunks_resent: int       # chunks that changed after they were first copied
     seconds: float
     sha256: str              # of the whole finished source file, which the copy matches
+
+
+def _pieces(data: bytes) -> list[str]:
+    return [_sha(data[k:k + PIECE]) for k in range(0, len(data), PIECE)]
 
 
 def _sha(data: bytes) -> str:
@@ -48,14 +54,15 @@ class _Follower:
         self.done, self.progress, self.cancel = done, progress, cancel
         self.chunk, self.poll, self.verify = chunk, poll, verify
         self.opener, self.sleep, self.now = opener, sleep, now
-        self.hashes: list[str] = []      # source sha256 of each chunk that is on the NAS and read back
+        self.hashes: list[str] = []      # source sha256 of each chunk that is in storage and read back
+        self.pieces: list[list[str]] = []    # the same chunks' PIECE-sized hashes
         self.fh = None                   # the .partial, open for writing
-        self.copied = 0                  # bytes on the NAS that read back correctly
+        self.copied = 0                  # bytes in storage that read back correctly
         self.checked = 0                 # bytes confirmed against the finished source
         self.t_last = now()
         self.bytes_since = 0
 
-    # --- NAS side, every call retried -------------------------------------------------
+    # --- storage side, every call retried -------------------------------------------------
 
     def _check_cancel(self):
         if self.cancel is not None and self.cancel.is_set():
@@ -80,7 +87,7 @@ class _Follower:
             self.fh = None
 
     def _retry(self, what: str, fn):
-        """Run fn until it succeeds; NAS errors are retried with backoff for GIVE_UP_S."""
+        """Run fn until it succeeds; storage errors are retried with backoff for GIVE_UP_S."""
         first = None
         delay = 1.0
         while True:
@@ -92,8 +99,8 @@ class _Follower:
                 t = self.now()
                 first = t if first is None else first
                 if t - first >= GIVE_UP_S:
-                    raise FollowError(f"The NAS copy of {os.path.basename(self.dst)} stopped while "
-                                      f"{what}, and the NAS was still failing after "
+                    raise FollowError(f"Copying {os.path.basename(self.dst)} to storage stopped while "
+                                      f"{what}, and storage was still failing after "
                                       f"{GIVE_UP_S / 60:.0f} minutes: {e}") from e
                 self._nap(delay)
                 delay = min(delay * 2, MAX_BACKOFF_S)
@@ -131,7 +138,28 @@ class _Follower:
             if self.verify:
                 back = self._read_back(offset, len(data))
                 if _sha(back) != digest:
-                    raise _Mismatch(f"chunk at {offset} bytes read back differently")
+                    raise _Mismatch("part of the file read back differently from what was written")
+        self._retry("writing", attempt)
+
+    def _patch(self, index: int, data: bytes, changed: list[int], digests: list[str]):
+        """Rewrite only the changed pieces of chunk `index`, fsync, and read them back.
+
+        MakeMKV goes back over the file when it finishes and changes a few bytes in almost every
+        chunk, so resending whole chunks would send the whole film twice."""
+        base = index * self.chunk
+
+        def attempt():
+            fh = self._open()
+            for k in changed:
+                fh.seek(base + k * PIECE)
+                fh.write(data[k * PIECE:(k + 1) * PIECE])
+            fh.flush()
+            os.fsync(fh.fileno())
+            if self.verify:
+                for k in changed:
+                    piece = data[k * PIECE:(k + 1) * PIECE]
+                    if _sha(self._read_back(base + k * PIECE, len(piece))) != digests[k]:
+                        raise _Mismatch("part of the file read back differently from what was written")
         self._retry("writing", attempt)
 
     def _truncate(self, size: int):
@@ -140,7 +168,7 @@ class _Follower:
             fh.truncate(size)
             fh.flush()
             os.fsync(fh.fileno())
-        self._retry("trimming the file", attempt)
+        self._retry("writing", attempt)
 
     # --- source side ------------------------------------------------------------------
 
@@ -182,10 +210,12 @@ class _Follower:
                 back = self._read_back(i * self.chunk, self.chunk)
             except OSError:
                 break
-            digest = _sha(self._src_chunk(i))
+            data = self._src_chunk(i)
+            digest = _sha(data)
             if _sha(back) != digest:
                 break
             self.hashes.append(digest)
+            self.pieces.append(_pieces(data))
             i += 1
         self.copied = len(self.hashes) * self.chunk
         if have != self.copied:
@@ -199,6 +229,7 @@ class _Follower:
         digest = _sha(data)
         self._put(index, data, digest)
         self.hashes.append(digest)
+        self.pieces.append(_pieces(data))
         self.copied = index * self.chunk + length
         self._report(length)
 
@@ -213,7 +244,7 @@ class _Follower:
             size = self._src_size()
             if size is None:
                 if finished:
-                    raise FollowError(f"{self.src} is missing; MakeMKV finished without leaving it")
+                    raise FollowError(f"MakeMKV finished without leaving {os.path.basename(self.src)}")
             elif self.copied + self.chunk <= size:
                 self._send_next(self.chunk)
                 continue
@@ -238,17 +269,24 @@ class _Follower:
                 self.checked += len(data)
                 self._report(0)
                 continue
+            new = _pieces(data)
             if i < len(self.hashes):
                 resent += 1
-            self._put(i, data, digest)
-            if i < len(self.hashes):
-                self.hashes[i] = digest
+                old = self.pieces[i]
+                changed = [k for k in range(len(new)) if k >= len(old) or new[k] != old[k]]
+                self._patch(i, data, changed, new)
+                self.hashes[i], self.pieces[i] = digest, new
+                sent = sum(len(data[k * PIECE:(k + 1) * PIECE]) for k in changed)
             else:
+                self._put(i, data, digest)
                 self.hashes.append(digest)
+                self.pieces.append(new)
+                sent = len(data)
             self.copied = max(self.copied, i * self.chunk + len(data))
             self.checked += len(data)
-            self._report(len(data))
+            self._report(sent)
         del self.hashes[n_chunks:]
+        del self.pieces[n_chunks:]
         if self.copied != size:
             self._truncate(size)
             self.copied = size
@@ -265,7 +303,7 @@ class _Follower:
 
 
 class _Mismatch(Exception):
-    """What was read back from the NAS is not what was written; treated like a network error."""
+    """What was read back from storage is not what was written; treated like a network error."""
 
 
 def stream_copy(src: str, dst: str, done: threading.Event, progress: FollowProgress,
@@ -276,11 +314,11 @@ def stream_copy(src: str, dst: str, done: threading.Event, progress: FollowProgr
 
     done: set once the writer has finished (makemkvcon exited successfully).
     progress(copied_bytes, checked_bytes, rate_bytes_per_s) after each chunk.
-    copied_bytes is what is on the NAS and read back correctly; checked_bytes stays 0
+    copied_bytes is what is in storage and read back correctly; checked_bytes stays 0
     while following and counts up during the final pass, as each chunk is confirmed
-    against the finished source. opener opens the NAS-side files (it is open() outside
+    against the finished source. opener opens the files in storage (it is open() outside
     tests). Raises transfer.Cancelled when cancel is set, leaving dst + ".partial" for a
-    later call to resume from, and FollowError when the NAS stays unreachable.
+    later call to resume from, and FollowError when storage stays unreachable.
     """
     f = _Follower(src, dst, done, progress, cancel, chunk, poll, verify, opener, sleep, now)
     try:

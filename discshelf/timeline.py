@@ -3,7 +3,7 @@
 Along the top, each title's number. Below it the reading speed, drawn only while a title is
 being read: MakeMKV opening the disc before each title is a hatched band with no line, so the
 line never slopes across it. Under that, three rows: the disc (opening, then reading), keeping
-the chosen languages, and copying to the NAS. Titles that read slowly get a red marker. After
+the chosen languages, and copying to storage. Titles that read slowly get a red marker. After
 "now", the titles still to rip are drawn dashed, from ripstats' estimate, up to the time the
 rip should end.
 
@@ -30,7 +30,7 @@ BLURAY_1X = 4.5e6
 TEN_MIN = 600.0
 NONE = -1             # no title (title numbers start at 0 on some discs)
 
-LANES = (("disc", "Disc"), ("languages", "Languages"), ("copy", "Copy to NAS"))
+LANES = (("disc", "Disc"), ("languages", "Languages"), ("copy", "Copy to storage"))
 
 
 def _nice(top: float) -> float:
@@ -417,10 +417,10 @@ def title_text(ti: int, n: int, spans: list[Span], est: ripstats.Estimate | None
             text += " That's slower than the titles around it."
         lang, copy = mine.get("languages"), mine.get("copy")
         if lang is not None and lang.end is not None:
-            text += f" Languages kept in {fmt_dur(lang.end - lang.start)}."
+            text += f" Kept the chosen languages in {fmt_dur(lang.end - lang.start)}."
         if copy is not None:
-            text += (f" Copied to the NAS and checked in {fmt_dur(copy.end - copy.start)}." if copy.end is not None
-                     else " Copying to the NAS now.")
+            text += (f" Copied to storage and checked in {fmt_dur(copy.end - copy.start)}." if copy.end is not None
+                     else " Copying to storage now.")
         return head, text
     if tm is not None and tm.read_start is not None:
         return f"Title {n}, reading now", f"Reading since {at(tm.read_start)}" + (

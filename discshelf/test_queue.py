@@ -5,7 +5,7 @@ methods it offers): which section each job goes in (needs you, working, done, an
 24-hour and dismissed rules), the check rows with their title-card readings and candidate
 episodes, confirm_title during and after a rip, copy_ready leaving titles that need a
 check, free_local never deleting a file that isn't verified on the NAS, the season view
-and the next disc, reverify finding a changed or missing NAS copy, plex_link and its
+and the next disc, reverify finding a changed or missing NAS copy, server_link and its
 fallbacks, ejecting after a rip, and the next disc's prefill in new_job.
 
 MakeMKV, the HDR tools and TVmaze are faked (the fakes from test_pipeline.py), Plex is a
@@ -95,7 +95,7 @@ def run():
         tv = CountingTvMaze()
         ctl = pipeline.Controller(cfg, JobStore(os.path.join(root, "jobs")), tvmaze=tv,
                                   discdb_client=discdb.TheDiscDb(fetch=lambda _u, _b: NO_DISCDB))
-        ctl.plex_fetch = FakeFetch({})      # nothing here may reach a real Plex
+        ctl.server_fetch = FakeFetch({})      # nothing here may reach a real Plex
         holder = {}
         ejected = []
         secrets = {}
@@ -130,6 +130,10 @@ def run():
             check(it and [c.title_index for c in it.checks] == [2], f"check rows: {it and it.checks}")
             check(it and it.ready_to_copy == 2, f"ready to copy: {it and it.ready_to_copy}")
             check(it and "0 of 3 episodes in Plex." in it.reason and "title card" in it.reason, f"reason: {it and it.reason}")
+            cfg.media_server = "none"
+            it_none = item(ctl.queue([job], set()), job)
+            check(it_none and "0 of 3 episodes copied." in it_none.reason, f"reason with no server: {it_none and it_none.reason}")
+            cfg.media_server = "plex"
             row = it.checks[0] if it and it.checks else None
             opts = [(e.number, why) for e, why in row.options] if row else []
             check(row and row.read == "WIZARD" and row.current and row.current.number == 3, f"row: {row}")
@@ -190,7 +194,7 @@ def run():
             check(n == 1 and job.stage == "done" and job.copied_at, f"second copy_ready: {n} {job.stage}")
             it = item(ctl.queue([job], set()), job)
             check(it and it.section == "done" and it.done_at == job.copied_at, f"done item: {it}")
-            check(it and it.reason == "3 episodes copied to the NAS and checked.", f"done reason: {it and it.reason}")
+            check(it and it.reason == "3 episodes copied to storage and checked.", f"done reason: {it and it.reason}")
 
             # The 24-hour rule, dismiss, and dismissed jobs leaving the queue.
             real_copied = job.copied_at
@@ -346,10 +350,10 @@ def run():
             check([(i.job.id, i.section) for i in v.items] == [("d", "needs"), ("a", "needs"), ("b", "working"),
                                                                  ("c", "done")], f"order: {[(i.job.id, i.section) for i in v.items]}")
 
-            # 7. plex_link: the exact season when Plex has it, else Plex Web's home page.
+            # 7. server_link: the exact season when Plex has it, else Plex Web's home page.
             home = "http://plex.test:32400/web/index.html"
             pj = Job(id="p", show="Test Show", season=1, library="TV Shows", destination=nas)
-            check(ctl.plex_link(pj) == home, "a link without a Plex sign-in")
+            check(ctl.server_link(pj) == home, "a link without a Plex sign-in")
             secrets.update(plex_token="tok", plex_client_id="cid")
             sections = {"MediaContainer": {"Directory": [{"key": "2", "title": "TV Shows", "type": "show",
                                                           "Location": [{"path": "/volume1/Media/Shows"}]}]}}
@@ -358,16 +362,16 @@ def run():
                       "/library/sections/2/all": {"MediaContainer": {"Metadata": [{"ratingKey": "9001", "title": "Test Show"}]}},
                       "/library/metadata/9001/children": {"MediaContainer": {"Metadata": [
                           {"ratingKey": "9002", "type": "season", "index": 1}]}}}
-            ctl.plex_fetch = FakeFetch(routes)
-            check(ctl.plex_link(pj) == f"{home}#!/server/m1/details?key=%2Flibrary%2Fmetadata%2F9002",
-                  f"season link: {ctl.plex_link(pj)}")
+            ctl.server_fetch = FakeFetch(routes)
+            check(ctl.server_link(pj) == f"{home}#!/server/m1/details?key=%2Flibrary%2Fmetadata%2F9002",
+                  f"season link: {ctl.server_link(pj)}")
             pj.season = 4
-            check(ctl.plex_link(pj).endswith("%2F9001"), "no such season didn't fall back to the show")
+            check(ctl.server_link(pj).endswith("%2F9001"), "no such season didn't fall back to the show")
             pj.show = "Unknown"
-            check(ctl.plex_link(pj) == home, "a show Plex lacks didn't give the home page")
-            ctl.plex_fetch = FakeFetch({p: pipeline.PlexError("Could not reach plex.test") for p in routes})
+            check(ctl.server_link(pj) == home, "a show Plex lacks didn't give the home page")
+            ctl.server_fetch = FakeFetch({p: pipeline.PlexError("Could not reach plex.test") for p in routes})
             pj.show = "Test Show"
-            check(ctl.plex_link(pj) == home, "offline Plex didn't give the home page")
+            check(ctl.server_link(pj) == home, "offline Plex didn't give the home page")
 
             # 8. nas_folder: the season folder, not an extras folder; a film's own folder.
             nj = Job(id="n", show="Test Show", season=1, destination=nas, files=[
@@ -398,7 +402,7 @@ def run():
     check(fake.copy_ready(needs.job, lambda f, t: None, threading.Event()) > 0, "fake copy_ready copied nothing")
     done = next(i for i in v.items if i.section == "done")
     check(fake.free_local(done.job) > 0 and fake.free_local(done.job) == 0, "fake free_local")
-    check(fake.plex_link(done.job).startswith(fake.cfg.plex_url) and fake.nas_folder(done.job), "fake links")
+    check(fake.server_link(done.job).startswith(fake.cfg.plex_url) and fake.nas_folder(done.job), "fake links")
     check(fake.reverify(done.job, lambda f, t: None) == [], "fake reverify")
     fake.dismiss(done.job)
     check(item(fake.queue(fake.jobs(), set()), done.job) is None, "fake dismiss")

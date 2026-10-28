@@ -3,8 +3,8 @@
 # Disc Shelf
 
 Disc Shelf rips your Blu-rays, 4K UHD discs and DVDs, works out which episode each title is,
-and copies them into your Plex library with the right names. Put a disc in, check the
-matches it isn't sure about, and it does the rest.
+and copies them into your Plex or Jellyfin library with the right names. Put a disc in,
+check the matches it isn't sure about, and it does the rest.
 
 It's a desktop app for Linux. It uses [MakeMKV](https://www.makemkv.com/) to read discs,
 so it backs up discs you own exactly as they are: no re-encoding, every audio track and HDR
@@ -26,18 +26,19 @@ format kept, unless you ask for a smaller AV1 copy as well.
   4. running times, as a last guess.
 
   Anything it isn't sure about is marked **Check**, with the reason, and waits for you.
-- **Copies while it rips.** Each title goes to your NAS or library folder as soon as it's
-  ripped and matched, is read back to check it arrived intact, and Plex is asked to scan
-  just that folder. A film is copied while it's still being ripped.
+- **Copies while it rips.** Each title goes to your library folder (a network share, a USB
+  drive or a local folder) as soon as it's ripped and matched, is read back to check it
+  arrived intact, and Plex or Jellyfin is asked to scan just that folder. A film is copied
+  while it's still being ripped.
 - **Tidies the library you already have.** The Library page checks a show's files against
   TVmaze, finds duplicates and misnamed or misplaced episodes, lists every rename before
   anything changes, and can undo it.
 - **Keeps HDR as it is.** HDR10, HDR10+ and Dolby Vision are kept untouched by default.
-  The badge on the Rip page says **RAW - No Conversion**, or lists what a setting would
-  change.
+  The badge on the Rip page says **RAW**, **Compressed (Lossless)** or
+  **Compressed (Lossy)**, and lists what a setting would change.
 - **Optional AV1 versions.** For 4K discs it can also make a smaller AV1 copy, on the
-  processor (best quality) or an Nvidia graphics card (fast). Plex lists it next to the
-  original, for phones, browsers and streaming away from home.
+  processor (best quality) or an Nvidia graphics card (fast). Plex and Jellyfin list it
+  next to the original, for phones, browsers and streaming away from home.
 - **A queue that tells you what to do.** Discs that need you come first, then what's
   running, then each season's progress across discs ("Next: disc 3") and what finished today.
 
@@ -65,9 +66,11 @@ Then open **Disc Shelf**. The first-run setup checks the computer and fixes what
 - **Drive access.** MakeMKV needs the kernel's generic SCSI devices (`/dev/sg*`). Some
   distributions don't load them by default; the setup loads them and keeps them loaded,
   asking for your password once.
-- **Where rips go**: pick the folders your Plex libraries use for TV shows and films. A
-  NAS share mounted on this computer works.
-- **Plex** (optional): sign in once so each disc is added to the right library straight away.
+- **Where rips go**: pick the folders your libraries use for TV shows and films. A network
+  share mounted on this computer, a USB drive or a local folder all work.
+- **Media server** (optional): sign in to Plex, or paste a Jellyfin API key, so each disc is
+  added to the right library straight away. Without one, files are copied and checked, and
+  the server finds them on its next scan.
 
 Everything else is inside the Flatpak: ffmpeg (with SVT-AV1, NVENC and VMAF), mkvmerge,
 dovi_tool, Chromaprint's fpcalc, Tesseract and the RapidOCR models.
@@ -90,7 +93,7 @@ disc-shelf                            # or: python3 scripts/disc_shelf.py
 - Linux. Windows and macOS aren't supported yet.
 - An optical drive MakeMKV can read. For 4K UHD discs that means a drive that supports
   LibreDrive; see the [MakeMKV forum's drive list](https://forum.makemkv.com/forum/viewforum.php?f=19).
-- Somewhere to put the files, usually a NAS share Plex reads from.
+- Somewhere to put the files, usually a network share your media server reads from.
 
 ## How it works
 

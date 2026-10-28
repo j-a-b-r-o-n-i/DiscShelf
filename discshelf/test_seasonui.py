@@ -160,7 +160,7 @@ def run():
     f26 = next(x for x in disc1.files if x.title_index == 26)
     check(t26.version == "French" and f26.dest_rel.endswith("Markets - French.mkv"), f"disc 1 record: {t26.version}")
     check("nas:1:20" not in [p.key for p in m.problems_list()], "the NAS duplicate is still flagged")
-    check("rescan Season 01" in m.compare.done_text.text() and ctl.plex_scans, m.compare.done_text.text())
+    check("rescan Season 01" in m.compare.done_text.text() and ctl.server_scans, m.compare.done_text.text())
     m.compare.undo_link.linkActivated.emit("#")
     check(wait(lambda: not win.busy("fix") and not win.busy("season"), 20), "undo never finished")
     app.processEvents()

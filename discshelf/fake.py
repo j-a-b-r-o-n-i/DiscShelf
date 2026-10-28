@@ -4,7 +4,7 @@
 
 The drive holds one of three sample discs; Eject moves on to the next one (a 4K UHD
 Severance season 1 disc, The Office season 3 disc 2, and the film Pitch Perfect).
-Nothing touches the disk, the network or Plex.
+Nothing touches the disk, the network or a media server.
 
 The queue also has two 4K films with AV1 versions: Dune: Part Two is encoding (it moves
 on whenever the queue is read, unless delay is 0 or hold is set), and Blade Runner 2049
@@ -25,7 +25,7 @@ import zlib
 import time
 from types import SimpleNamespace
 
-from . import av1, makemkv, nasfix, scanwatch, season
+from . import av1, makemkv, mediaserver, nasfix, scanwatch, season
 from .play import Player
 from .config import Config, sample_destinations
 from .discinfo import AudioInfo, DiscReport, SubtitleInfo, TitleInfo, VideoInfo
@@ -187,7 +187,7 @@ BLUEY_S1 = [name for _, name, _ in EPISODES[(41821, 1)]]
 def _sample_library(root: str) -> None:
     """Empty files standing in for a TV library that needs tidying, for the Library page:
     Bluey named the old way (no episode names) with a second Markets from the "(2)" dedupe,
-    a stray clip and a misplaced episode; Severance already named the Plex way; and a
+    a stray clip and a misplaced episode; Severance already named the way media servers read; and a
     release folder of The Office."""
     files = [f"Bluey (2018)/Season 01/Bluey (2018) - S01E{n:02d}.mkv" for n in range(1, 27) if n != 24]
     files += ["Bluey (2018)/Season 01/Bluey (2018) - S01E20 (2).mkv",
@@ -274,7 +274,8 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         self._enc_phase: dict[tuple[str, int], float] = {}   # (job id, title) -> when its check or copy began
         self._enc_tick = time.monotonic()
         self._library_root: str | None = None
-        self.plex_scans: list[tuple[str, str]] = []     # (library, folder) the Library page asked Plex to scan
+        self.secrets: dict[str, str] = {}               # stands in for secrets.json
+        self.server_scans: list[tuple[str, str]] = []     # (library, folder) the Library page asked the media server to scan
         self.scan_times = scanwatch.ScanTimes(None)      # kept in memory, never in the state folder
         self.scan_key_steps = 6                         # simulated requests to MakeMKV's server on a 4K disc
         self._scan_watch: scanwatch.ScanWatch | None = None
@@ -284,7 +285,7 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
     # -- sample history -----------------------------------------------------
     def _seed(self):
         """The queue's sample: The Office S3 disc 2 waits for 2 checks, disc 1 has a failed copy,
-        Severance S1 disc 1 is "ripping", and Pitch Perfect reached Plex 2 minutes ago."""
+        Severance S1 disc 1 is "ripping", and Pitch Perfect was copied 2 minutes ago."""
         office_disc, office_meta = self._discs[1]
         office = self._job_for(office_disc, office_meta, created=_now(95))
         office.show_id = 526
@@ -301,8 +302,8 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 m.note = "The title card reads “THE MERGFR”, which is closest to “The Merger”."
             elif m.title_index == 2:
                 m.episode, m.confidence, m.source = eps[9], "check", "runtime"
-                m.note = ("Title is 21 min but the episode is listed as 27 min. Order unclear: the running "
-                          "time also fits episode 11, “Back from Vacation”.")
+                m.note = ("The order is unclear: the running time also fits episode 11, “Back from "
+                          "Vacation”.")
             else:
                 m.confidence = "close"
         self._card_state[office.id] = {1: CardStatus("read", text="THE MERGFR", seconds=14.2),
@@ -319,13 +320,15 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         for f in pitch.files:
             f.state = "verified"
         pitch.stage, pitch.progress = "done", 1.0
-        pitch.status = "Copied to Movies and checked. Plex added it 2 min ago."
+        pitch.status = self._done_status("Movies", " 2 min ago")
         pitch.copied_at = pitch.updated = _now(2)
 
         failed = Job(id=self._new_id(), disc_label="THE_OFFICE_S3_D1", media_kind="tv", show="The Office (US)",
                      show_id=526, year=2005, season=3, disc_number=1, destination=self.cfg.destination("tv").path,
                      library="TV Shows", stage="failed", created=_now(2900), updated=_now(2880),
-                     status="Copy failed: the NAS stopped answering at 62%. The other 5 episodes are in Plex.")
+                     status="Copy failed: the TV Shows folder stopped answering at 62%. " +
+                            (f"The other 5 episodes are in {mediaserver.name(self.cfg)}." if mediaserver.name(self.cfg)
+                             else "The other 5 episodes are copied."))
         for i in range(6):
             ok = i < 5
             failed.files.append(RippedFile(
@@ -335,7 +338,7 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             failed.matches.append(Match(i, "episode", eps[i + 1], confidence="close", source="runtime"))
             failed.titles_progress.append(TitleProgress(
                 i, "verified" if ok else "failed", int(4.1e9), int(4.1e9), int(4.1e9) if ok else int(2.5e9),
-                int(4.1e9) if ok else 0, note="" if ok else "Copy failed: the NAS stopped answering at 62%."))
+                int(4.1e9) if ok else 0, note="" if ok else "Copy failed: the TV Shows folder stopped answering at 62%."))
 
         sev_disc, sev_meta = self._discs[0]
         sev = self._job_for(sev_disc, sev_meta, created=_now(25))
@@ -363,8 +366,8 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         self._seed_bluey()
 
     def _seed_bluey(self):
-        """Bluey season 1 on two discs whose labels give no disc number. Disc 1 went to the NAS 3 days
-        ago with titles 6 and 26 both as “Markets” (title 26 is French only), so the NAS has
+        """Bluey season 1 on two discs whose labels give no disc number. Disc 1 was copied 3 days
+        ago with titles 6 and 26 both as “Markets” (title 26 is French only), so the library has
         “S01E20.mkv” and “S01E20 (2).mkv”. Disc 2 is ripped and matched: titles 1 and 27 are both
         “Daddy Putdown”, which holds both back, and title 19 was matched by its running time only."""
         tv = self.cfg.destination("tv")
@@ -395,7 +398,7 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                     f.dest_rel = f"Bluey (2018)/Season 01/Bluey (2018) - S01E{n:02d}" + \
                         (" (2).mkv" if f.title_index == 26 else ".mkv")
                 job.stage, job.progress, job.copied_at = "done", 1.0, _now(created - 40)
-                job.status = "Copied to TV Shows and checked. Plex added it."
+                job.status = self._done_status("TV Shows")
             else:
                 m19 = job.matches[18]
                 m19.confidence, m19.source = "check", "runtime"
@@ -407,7 +410,7 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         with self.job_lock:
             self.apply_season(job)
     def _seed_av1(self):
-        """Dune: Part Two's remux is in Plex and its AV1 version is 37% encoded; Blade Runner 2049's
+        """Dune: Part Two's remux is copied and its AV1 version is 37% encoded; Blade Runner 2049's
         AV1 version scored 89 on the quality check, so it wasn't copied."""
         movies = self.cfg.destination("movie")
         for label, name, year, length, gb, created in (("DUNE_PART_TWO", "Dune: Part Two", 2024, "2:46:00", 61.8, 80),
@@ -417,7 +420,7 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                       destination=movies.path if movies else "", library=movies.library if movies else "",
                       rip_dir=f"{self.cfg.rip_path}/{label}", titles=[title], stage="done", progress=1.0,
                       created=_now(created), updated=_now(created - 60), copied_at=_now(created - 70),
-                      status="Copied to Movies and checked. Plex added it.")
+                      status=self._done_status("Movies"))
             job.files = [RippedFile(0, f"{job.rip_dir}/title_t00.mkv", title.size_bytes, sha256="0" * 64,
                                     state="verified", hdr=HdrInfo("3840x2160", "hevc", hdr10=True, dolby_vision=True,
                                                                   dv_profile=7, dv_layer_kind="FEL"))]
@@ -803,7 +806,7 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 k = tp.index(cur) + 1
                 text = f"Ripping title {k} of {len(tp)} · {rate / 1e6:.1f} MB/s"
             else:
-                text = "Ripped. Copying the last title to the NAS."
+                text = "Ripped. Copying the last title to storage."
             progress(frac, text)
             if not rip_left and not ejected and self.cfg.eject_after_rip:
                 ejected = True          # the tray opens once the last title is ripped; the drive reads empty
@@ -818,13 +821,13 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 any(p.state == "verified" for p in tp)
         if all_done:
             job.stage, job.progress = "plex", 1.0
-            job.status = f"Asking Plex to scan {job.library or 'nothing'}."
+            job.status = self._scan_status(job)
             progress(1.0, job.status)
             self._sleep(steps=6)
             d = self.cfg.destination(job.media_kind)
             job.stage = "done"
             job.copied_at = _now()
-            job.status = f"Copied to {d.label if d else 'the NAS'} and checked. Plex added it just now."
+            job.status = self._done_status(d.label if d else "storage", " just now")
         else:
             job.stage, job.progress = "match", 1.0
             if waiting:
@@ -1039,13 +1042,13 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 self._queue_encode(job, f)
             done += f.size_bytes
         job.stage, job.progress = "plex", 1.0
-        job.status = f"Asking Plex to scan {job.library or 'nothing'}."
+        job.status = self._scan_status(job)
         progress(1.0, job.status)
         self._sleep(steps=6)
-        label = self.cfg.destination(job.media_kind).label if self.cfg.destination(job.media_kind) else "the NAS"
+        label = self.cfg.destination(job.media_kind).label if self.cfg.destination(job.media_kind) else "storage"
         job.stage = "done"
         job.copied_at = _now()
-        job.status = f"Copied to {label} and checked. Plex added it just now."
+        job.status = self._done_status(label, " just now")
         self.save_job(job)
 
     def cleanup(self, apply: bool = False) -> list[str]:
@@ -1135,7 +1138,7 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             else:
                 d = self.cfg.destination(job.media_kind)
                 job.stage, job.progress, job.copied_at = "done", 1.0, _now()
-                job.status = f"Copied to {d.label if d else 'the NAS'} and checked. Plex added it just now."
+                job.status = self._done_status(d.label if d else "storage", " just now")
         self.save_job(job)
         progress(1.0, job.status)
         return len(todo)
@@ -1146,7 +1149,7 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             for e in job.encodes:
                 if e.state == "failed":
                     e.state = "skipped"
-                    e.note = (e.note + " It was given up, so the remux is kept as it is.").strip()
+                    e.note = (e.note + " It won't be tried again, so the remux stays as it is.").strip()
         self.save_job(job)
 
     def free_local(self, job: Job | None = None) -> int:
@@ -1178,12 +1181,12 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         return os.path.join(job.destination, folder)
 
     def reverify(self, job: Job, progress) -> list[str]:
-        """Pretends to read each NAS copy back; every sample copy matches."""
+        """Pretends to read each copy in storage back; every sample copy matches."""
         files = [f for f in job.files if f.state == "verified"]
         for k, _f in enumerate(files):
             self._sleep(steps=2)
             progress((k + 1) / max(1, len(files)), f"Checking {k + 1} of {len(files)}")
-        job.status = f"Checked again: all {len(files)} NAS cop{'y' if len(files) == 1 else 'ies'} match the rip."
+        job.status = f"Checked again: all {len(files)} cop{'y' if len(files) == 1 else 'ies'} in storage match the rip."
         return []
 
     # -- the AV1 second version -------------------------------------------------
@@ -1265,7 +1268,7 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             for e in job.encodes:
                 if e.state in ENCODE_ACTIVE or e.state == "failed":
                     e.state, e.held, e.encoded, e.finished = "skipped", False, False, _now()
-                    e.note, changed = "Stopped. The remux stays in Plex as it is.", True
+                    e.note, changed = self._remux_stays(), True
         return changed
 
     def retry_encode(self, job: Job) -> int:
@@ -1295,11 +1298,35 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
     def recover_encodes(self) -> list:
         return []
 
-    def plex_link(self, job: Job) -> str:
-        root = f"{self.cfg.plex_url.rstrip('/')}/web/index.html"
-        if job.stage != "done":
+    def server_link(self, job: Job) -> str:
+        """The sample server's page for the job when it is done, else its home page; "" with no media server."""
+        key = abs(hash(job.show)) % 90000 + 1000
+        if self.cfg.media_server == "plex":
+            root = f"{self.cfg.plex_url.rstrip('/')}/web/index.html"
+            if job.stage != "done":
+                return root
+            return f"{root}#!/server/fake-server/details?key=%2Flibrary%2Fmetadata%2F{key}"
+        root = mediaserver.home_url(self.cfg)
+        if not root or job.stage != "done":
             return root
-        return f"{root}#!/server/fake-server/details?key=%2Flibrary%2Fmetadata%2F{abs(hash(job.show)) % 90000 + 1000}"
+        return f"{root}#/details?id=fake{key}"
+
+    # -- status sentences, following the chosen media server -------------------
+    def _scan_status(self, job: Job) -> str:
+        name = mediaserver.name(self.cfg)
+        return f"Asking {name} to scan {job.library or 'nothing'}." if name else "Copied and checked."
+
+    def _done_status(self, label: str, ago: str = "") -> str:
+        """"Copied to Movies and checked. Plex added it 2 min ago.", without the second sentence
+        when there is no media server. ago is "" or starts with a space."""
+        name = mediaserver.name(self.cfg)
+        if not name:
+            return f"Copied to {label} and checked."
+        return f"Copied to {label} and checked. {name} added it{ago}."
+
+    def _remux_stays(self) -> str:
+        name = mediaserver.name(self.cfg)
+        return f"Stopped. The remux stays in {name} as it is." if name else "Stopped. The remux stays as it is."
 
     def cover(self, drive_index: int, season: int | None = None) -> tuple[str, str]:
         """(image path, source) for the disc in the drive, or ("", "") when it has none."""
@@ -1392,14 +1419,30 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                                           dest_rel=f"Bluey (2018)/Season 01/Bluey (2018) - S01E{n:02d}.mkv"))
         return [*self.jobs(), bluey]       # last, so its card readings are the ones the page shows
 
-    def plex_scan_folder(self, library: str, rel: str) -> str:
-        self.plex_scans.append((library, rel))
-        return f"Plex is scanning {rel}."
+    def server_scan_folder(self, library: str, rel: str) -> str:
+        self.server_scans.append((library, rel))
+        return f"{mediaserver.name(self.cfg) or 'The media server'} is scanning {rel}."
 
-    def plex_signed_in(self) -> bool:
-        return self._signed_in
+    def server_signed_in(self) -> bool:
+        if self.cfg.media_server == "jellyfin":
+            return bool(self.secrets.get("jellyfin_key"))
+        return self._signed_in and self.cfg.media_server == "plex"
 
-    def plex_libraries(self) -> list[str]:
+    def load_secret(self, name: str) -> str:
+        return self.secrets.get(name, "")
+
+    def save_secret(self, name: str, value: str) -> None:
+        self.secrets[name] = value
+
+    def jellyfin_test(self, url: str, key: str) -> str:
+        self._sleep(steps=2)
+        if key != "good-key":
+            from .jellyfin import JellyfinError
+            raise JellyfinError("Jellyfin refused the API key. Make a new one in Jellyfin under Dashboard → API Keys "
+                                "and paste it in Settings.")
+        return "Living room"
+
+    def server_libraries(self) -> list[str]:
         return ["Movies", "TV Shows", "Anime"]
 
     def free_bytes(self, path: str) -> int | None:

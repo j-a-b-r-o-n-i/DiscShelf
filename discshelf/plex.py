@@ -17,6 +17,7 @@ import uuid
 from typing import Callable
 
 from . import config
+from .mediaserver import ServerError, norm_title as _norm
 
 PRODUCT = "Disc Shelf"
 PLEX_TV = "https://plex.tv/api/v2"
@@ -26,13 +27,8 @@ AUTH_APP = "https://app.plex.tv/auth#?"
 Fetch = Callable[[str, str, dict], "tuple[int, bytes]"]
 
 
-class PlexError(RuntimeError):
+class PlexError(ServerError):
     """Plex or plex.tv answered with an error, or could not be reached."""
-
-
-def _norm(title: str) -> str:
-    """A title compared without case, punctuation or spacing: "Severance" == "severance"."""
-    return re.sub(r"[^0-9a-z]+", "", title.casefold())
 
 
 def _urllib_fetch(method: str, url: str, headers: dict, timeout: float = 15) -> tuple[int, bytes]:
@@ -56,6 +52,8 @@ def install_client_id() -> str:
 
 
 class Plex:
+    name = "Plex"
+
     def __init__(self, url: str, token: str, fetch: Fetch | None = None, client_id: str | None = None):
         self.url = url.rstrip("/")
         self.token = token
@@ -156,6 +154,24 @@ class Plex:
             return root
         key = urllib.parse.quote(f"/library/metadata/{rating_key}", safe="")
         return f"{root}#!/server/{machine_id}/details?key={key}"
+
+    # The calls mediaserver.py names, shared with jellyfin.Jellyfin
+
+    server_path = plex_path
+
+    def find_key(self, section_key: str, title: str, year: int | None = None) -> str | None:
+        item = self.find(section_key, title, year)
+        return str(item["ratingKey"]) if item and item.get("ratingKey") else None
+
+    def season_key(self, show_key: str, number: int) -> str | None:
+        season = self.season(show_key, number)
+        return str(season["ratingKey"]) if season and season.get("ratingKey") else None
+
+    def home_url(self) -> str:
+        return self.web_url("")
+
+    def link(self, key: str) -> str:
+        return self.web_url(self.identity(), key)
 
     # PIN sign-in (https://forums.plex.tv/t/authenticating-with-plex/609370)
 

@@ -1,9 +1,9 @@
-"""Copy rips to the NAS share with rsync, check the copy, and decide when the local rip can go.
+"""Copy rips to storage with rsync, check the copy, and decide when the local rip can go.
 
-The NAS shares are CIFS mounts, which has three consequences for the rsync flags:
+Storage is often a CIFS mount, which has three consequences for the rsync flags:
 CIFS cannot store Unix owners or modes (so those are not sent), a dropped
 connection must resume rather than start a 60 GB file again, and a half-copied
-file must never sit under its final name where Plex would scan it.
+file must never sit under its final name where a media server would scan it.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from typing import Callable
 
 Progress = Callable[[float, str], None]
 
-PARTIAL_DIR = ".discshelf-partial"   # hidden, so Plex skips it; rsync removes it when empty
+PARTIAL_DIR = ".discshelf-partial"   # hidden, so media servers skip it; rsync removes it when empty
 
 RSYNC_FLAGS = [
     "-t",                            # keep modification times; nothing else CIFS can store
@@ -149,7 +149,7 @@ def sha256(path: str, progress: Progress | None = None, chunk: int = CHUNK) -> s
 
 def verify(src: str, dst: str, mode: str, src_hash: str | None = None,
            progress: Progress | None = None) -> bool:
-    """"size": the sizes match. "readback": also the NAS copy, read back through the mount, hashes the same."""
+    """"size": the sizes match. "readback": also the copy in storage, read back through the mount, hashes the same."""
     try:
         if os.path.getsize(src) != os.path.getsize(dst):
             return False

@@ -71,7 +71,7 @@ def run():
     # Shuffled disc: the 30 min and 50 min episodes are swapped on the disc.
     ms = match_titles([T(0, 50), T(1, 30), T(2, 40)], eps(30, 50, 40))
     check([m.episode.number for m in ms] == [1, 2, 3], f"never reordered: {ms}")
-    check(ms[0].confidence == "check" and "Order unclear" in ms[0].note and "episode 2" in ms[0].note, f"flag 0: {ms[0]}")
+    check(ms[0].confidence == "check" and "order is unclear" in ms[0].note and "episode 2" in ms[0].note, f"flag 0: {ms[0]}")
     check(ms[1].confidence == "check" and "episode 1" in ms[1].note, f"flag 1: {ms[1]}")
     check(ms[2].confidence == "close" and ms[2].note == "", f"in-place title untouched: {ms[2]}")
 

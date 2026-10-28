@@ -380,7 +380,7 @@ def _by_order(members: list[Title]) -> Group:
         marks = [(s, s != pick.segments[i] if i < len(pick.segments) else True) for i, s in enumerate(t.segments)]
         n = sum(1 for _s, m in marks if m)
         strips.append(Strip(t, marks, "In order" if t is pick and len(ascending) == 1 else
-                            ("The pick" if t is pick else f"{n} piece{'' if n == 1 else 's'} in a different place")))
+                            ("Picked" if t is pick else f"{n} piece{'' if n == 1 else 's'} in a different place")))
         if t is not pick:
             only[t.index] = "Different order"
     g = Group("order", titles, f"{_what(titles)}, {_times(len(titles))}: the same pieces in different orders",
