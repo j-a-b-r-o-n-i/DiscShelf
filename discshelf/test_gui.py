@@ -197,6 +197,18 @@ def run():
                 return True
         return False
 
+    from discshelf import timeline as tl
+    from discshelf.models import Sample, Span
+
+    # The speed axis follows the reading speed: copy samples and one sample far above the rest
+    # (a whole file counted at once) don't set its top.
+    check(tl._scale_top([]) == 1.0, "an empty axis")
+    check(tl._scale_top([9.0, 11.0]) == 11.0, "a short run uses its highest speed")
+    check(tl._scale_top([10.0] * 40 + [14000.0]) == 15.0, f"a lone spike sets the axis: {tl._scale_top([10.0] * 40 + [14000.0])}")
+    g = tl.RipTimeline()
+    g.now, g.samples = 100.0, [Sample(50, "rip", 10e6, 0), Sample(60, "copy", 900e6, 0)]
+    check(g._points(Span("read", 1, 40, None)) == [(50, 10.0)], "copy samples drawn as reading speed")
+
     check(wait(locked_row, 20), "no title showed as on the NAS with its match locked")
     card = win.rip.queue_cards.get(job.id)
     check(wait(lambda: card is not None and len(card.graph.samples) >= 2 and not card.dual.isHidden()
@@ -209,6 +221,7 @@ def run():
               f"no estimate under the timeline: {card.detail_head.text()!r}")
         kinds = {s.kind for s in card.graph.spans}
         check({"open", "read", "languages", "copy"} <= kinds, f"timeline steps: {kinds}")
+
         card.graph.repaint()
         first = next(iter(card.graph.boxes), None)
         if first is not None:

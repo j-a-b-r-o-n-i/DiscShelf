@@ -39,6 +39,16 @@ def _nice(top: float) -> float:
     return next(m * mag for m in (1, 2, 2.5, 5, 10) if m * mag >= raw)
 
 
+def _scale_top(rates: list[float]) -> float:
+    """The highest speed the axis has to show, in MB/s. A lone sample far above the rest (a file
+    counted in one go) would flatten everything else, so it is clipped at the top instead."""
+    vals = sorted(r for r in rates if r > 0)
+    if not vals:
+        return 1.0
+    usual = vals[int(0.95 * (len(vals) - 1))]
+    return max(1.0, min(vals[-1], usual * 1.5) if len(vals) >= 10 else vals[-1])
+
+
 def fmt_dur(s: float) -> str:
     s = int(round(s))
     if s < 60:
@@ -122,8 +132,9 @@ class RipTimeline(QWidget):
             return L + (t - t0) / max(1e-6, t1 - t0) * (R - L)
 
         reads = [s for s in self.spans if s.kind == "read"]
-        rates = [s.rate / 1e6 for s in self.samples if t0 <= s.t <= t1]
-        top_v = max(rates + ([self.est.rate / 1e6] if self.est else []) + [1.0])
+        drawn = {id(s): self._points(s) for s in reads}
+        rates = [r for pts in drawn.values() for t, r in pts if t0 <= t <= t1]
+        top_v = _scale_top(rates + ([self.est.rate / 1e6] if self.est else []))
         step = _nice(top_v)
         vmax = step * math.ceil(top_v * 1.1 / step)
 
@@ -182,8 +193,7 @@ class RipTimeline(QWidget):
         fill = QColor(ACCENT)
         fill.setAlphaF(0.16)
         for s in reads:
-            end = s.end if s.end is not None else self.now
-            pts = [(x.t, x.rate / 1e6) for x in self.samples if s.start <= x.t <= end + 0.5]
+            pts = drawn[id(s)]
             if len(pts) >= 2:
                 path = QPainterPath(QPointF(X(pts[0][0]), Y(pts[0][1])))
                 for t, r in pts[1:]:
@@ -276,7 +286,7 @@ class RipTimeline(QWidget):
             pen.setDashPattern([2, 3])
             p.setPen(pen)
             p.drawLine(QPointF(X(self.now), top - 4), QPointF(X(self.now), lane_y["copy"] + 10))
-            last = self.samples[-1] if self.samples else None
+            last = next((x for x in reversed(self.samples) if x.kind == "rip"), None)
             reading = any(s.end is None for s in reads)
             if last is not None and reading:
                 p.setPen(QPen(QColor(SURFACE), 2))
@@ -305,6 +315,12 @@ class RipTimeline(QWidget):
             p.setPen(QColor(TEXT))
             p.drawText(QRectF(nowx - 30, axis_y - 14, 60, 14), Qt.AlignmentFlag.AlignCenter, "now")
         p.end()
+
+    def _points(self, s: Span) -> list[tuple[float, float]]:
+        """The reading speed in MB/s during one read span. Copy samples share the list and are left out."""
+        end = s.end if s.end is not None else self.now
+        return [(x.t, x.rate / 1e6) for x in self.samples
+                if x.kind == "rip" and s.start <= x.t <= end + 0.5]
 
     def _box(self, ti: int, a: float, b: float) -> None:
         old = self.boxes.get(ti)
