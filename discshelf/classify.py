@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from statistics import median
 
+from . import versions
 from .models import Stream, Title
 
 FEATURE_MIN_S = 3600        # a film is at least an hour
@@ -48,22 +49,27 @@ def segments_comparable(titles: list[Title]) -> bool:
     return True
 
 
-def classify_titles(titles: list[Title], min_episode_seconds: int = 900, min_title_seconds: int = SHORT_S) -> list[Title]:
+def classify_titles(titles: list[Title], min_episode_seconds: int = 900, min_title_seconds: int = SHORT_S,
+                    audio_langs: list[str] | None = None, subtitle_langs: list[str] | None = None) -> list[Title]:
     """Set kind and selected on every title, in place, and return the list.
 
     Titles from min_title_seconds up are considered. A run of similar titles shorter than
-    min_episode_seconds still counts as episodes when there are SHORT_RUN or more of them."""
+    min_episode_seconds still counts as episodes when there are SHORT_RUN or more of them.
+    Of titles that play the same film (see versions.py), only the one with the most tracks
+    in audio_langs and subtitle_langs is kept; the rest are duplicates, each with a variant
+    saying what only it has."""
     by_segments = segments_comparable([t for t in titles if t.duration_s >= min_title_seconds])
+    groups = versions.find_groups(titles, list(audio_langs or []), list(subtitle_langs or []), by_segments,
+                                  min_title_seconds)
+    dupes = {t.index: g.only.get(t.index, "") for g in groups for t in g.titles[1:]}
     kept: list[Title] = []
     for t in titles:
         t.selected = False
+        t.variant = ""
         if t.duration_s < min_title_seconds:
             t.kind = "short"
-        elif by_segments and t.segments and any(k.segments == t.segments for k in kept):
-            t.kind = "duplicate"
-        elif not by_segments and t.size_bytes and any(
-                abs(k.duration_s - t.duration_s) <= 1 and k.size_bytes == t.size_bytes for k in kept):
-            t.kind = "duplicate"
+        elif t.index in dupes:
+            t.kind, t.variant = "duplicate", dupes[t.index]
         else:
             t.kind = "unknown"
             kept.append(t)

@@ -32,6 +32,7 @@ class Title:
     kind: str = "unknown"        # "episode" | "play_all" | "extra" | "duplicate" | "short" | "feature" | "unknown"
     selected: bool = False
     title_id: str = ""           # a DVD's own title number, e.g. "02" (MakeMKV's original title id)
+    variant: str = ""            # a duplicate: what only it has next to the title picked, e.g. "Japanese audio"
 
 
 @dataclass

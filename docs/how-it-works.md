@@ -32,6 +32,19 @@ This walks through each screen and the decisions Disc Shelf makes for you.
     11-minute cartoons work.
   - DVDs number each title's segments from 1, so on a DVD, play-alls and duplicates are
     found by length and size instead.
+- **Titles that play the same film are grouped**, and only one is ticked. A disc can hold:
+  - the same video with different languages, one playlist per country it's sold in;
+  - a longer cut that plays every piece of the shorter one, plus scenes only it has;
+  - copies that play the same pieces in different orders, added to confuse copy programs.
+
+  The one with the most tracks in your languages is ticked. The others are labelled by what
+  only they have, for example "Japanese audio". Under the title list, a panel compares them
+  (languages side by side, or each title's pieces as a bar) and says why one was picked.
+  "Rip … instead" swaps the pick. For shuffled copies, the pick is the one that plays its
+  pieces in the order they're stored on the disc, if exactly one does; that's a guess, so
+  watch the start of it.
+- **Video choices that don't apply are greyed out** with a tooltip saying why: no 4K video,
+  no Dolby Vision once the rip has been checked, or the rip is running.
 - **Audio and subtitles** default to English; change the defaults in Settings.
 - **HDR** defaults to RAW, which keeps every HDR format and converts nothing. The "Not Raw"
   badge lists each setting that would change the HDR from the disc.

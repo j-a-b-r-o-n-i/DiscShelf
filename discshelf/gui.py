@@ -49,6 +49,8 @@ from .seasonui import (ClickChip, CompareTitle, ComparePanel, FixOption, FixView
                        WatchChooser, watch_button)
 from .makemkv import ScanStopped
 from .scanui import ScanPanel
+from .versionsui import VersionsPanel
+from . import classify, versions
 from .taskbar import TaskbarProgress, notify
 
 try:
@@ -196,6 +198,8 @@ KIND_CHIP = {"episode": "warn", "feature": "warn", "extra": "info"}
 
 def kind_text(t: Title) -> str:
     label = KIND_LABEL.get(t.kind, "Unknown")
+    if t.kind == "duplicate" and getattr(t, "variant", ""):
+        label = t.variant
     return f"{label} · skipped" if t.kind in ("play_all", "duplicate") and not t.selected else label
 
 
@@ -1727,6 +1731,12 @@ class RipPage(QWidget):
         self.table_empty.setContentsMargins(20, 16, 20, 16)
         tcard.lay.addWidget(self.table)
         tcard.lay.addWidget(self.table_empty)
+        # Titles that play the same film, and what differs between them.
+        self.versions_lay = QVBoxLayout()
+        self.versions_lay.setSpacing(10)
+        self.versions_lay.setContentsMargins(16, 0, 16, 16)
+        self.version_panels: list[VersionsPanel] = []
+        tcard.lay.addLayout(self.versions_lay)
         col.addWidget(tcard)
 
         # Video
@@ -1975,6 +1985,36 @@ class RipPage(QWidget):
             t.setRowHeight(r, 46)
         t.blockSignals(False)
         self.apply_hide()
+        self.fill_versions()
+
+    def fill_versions(self):
+        """A panel per group of titles that play the same film, while the titles can still change.
+        Once a rip starts, the ripped title keeps only the tracks chosen, so a comparison then
+        would be wrong."""
+        clear_layout(self.versions_lay)
+        self.version_panels = []
+        job = self.job
+        if job is None or job.stage != "rip" or self.ripping():
+            return
+        long_ = [t for t in job.titles if t.duration_s >= classify.SHORT_S]
+        groups = versions.find_groups(job.titles, job.audio_langs or self.win.cfg.audio_langs,
+                                      job.subtitle_langs or self.win.cfg.subtitle_langs,
+                                      classify.segments_comparable(long_), classify.SHORT_S)
+        selected = {t.index for t in job.titles if t.selected}
+        for g in groups:
+            panel = VersionsPanel(g, selected, self.win.mono)
+            panel.rip_instead.connect(lambda ix, g=g: self.rip_instead(g, ix))
+            self.versions_lay.addWidget(panel)
+            self.version_panels.append(panel)
+
+    def rip_instead(self, group, index: int):
+        for t_ in group.titles:
+            t_.selected = t_.index == index
+        self.fill_titles()
+        self.fill_streams()
+        self.fill_video()
+        self.update_actions()
+        self.update_stream_note()
 
     def apply_hide(self, *_):
         if not self.job:
@@ -1995,6 +2035,9 @@ class RipPage(QWidget):
                 lab = w.findChild(QLabel) if w else None
                 if lab:
                     set_chip(lab, kind_text(t_), KIND_CHIP.get(t_.kind, "plain"))
+        selected = {t_.index for t_ in self.job.titles if t_.selected}
+        for panel in self.version_panels:
+            panel.set_selected(selected)
         self.fill_streams()
         self.fill_video()
         self.update_actions()

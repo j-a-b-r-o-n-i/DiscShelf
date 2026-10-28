@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Titles that play the same film are grouped, and labelled by what only they have
+  ("Japanese audio", "Longer cut", "Different order") instead of "Duplicate". A panel
+  under the title list compares them and says why one was picked; "Rip … instead" swaps
+  it. The one with the most tracks in your languages is picked. Before, the first title
+  the disc listed was kept, and a longer cut of a film was taken for a second episode.
 - The Rip page's Video choices that don't apply to the disc in the drive are greyed out, and
   their tooltip says why: no 4K video, HDR10 with no Dolby Vision once the rip has been
   checked, the rip is running, or the disc is finished. The AV1 choice and the 1080p

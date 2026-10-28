@@ -922,7 +922,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             self._mkv.release()
             self._scan_cancel.pop(drive_index, None)
         self.scan_times.record(scanwatch.disc_kind(disc.uhd, disc.disc_type), watch.status().elapsed)
-        classify.classify_titles(disc.titles, self.cfg.min_episode_minutes * 60)
+        classify.classify_titles(disc.titles, self.cfg.min_episode_minutes * 60,
+                                 audio_langs=self.cfg.audio_langs, subtitle_langs=self.cfg.subtitle_langs)
         self._scans[drive_index] = (parsed, disc)
         return parsed, disc
 

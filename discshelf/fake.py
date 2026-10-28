@@ -107,10 +107,33 @@ def _sample_discs(drive: Drive) -> list[tuple[Disc, dict]]:
                      ("00045.m2ts", "12:30", 1.4, 1, "extra", False),
                      ("00046.m2ts", "0:31", 0.1, 1, "short", False),
                  ], _bd_streams()))
+    # Two playlists of one film (Harry Potter and the Chamber of Secrets, 4K): the same video
+    # file, one with English and 7 European languages, the other with English and Japanese.
+    euro = [("fra", "French"), ("deu", "German"), ("ita", "Italian"), ("spa", "Spanish"), ("spa", "Spanish"),
+            ("por", "Portuguese"), ("cat", "Catalan"), ("pol", "Polish")]
+    hevc = Stream(0, "video", "MpegH", "MpegH HEVC Main10@L5.1", resolution="3840x2160")
+    s100 = [hevc, Stream(1, "audio", "DTS-HD MA", "DTS-HD Master Audio", "eng", "English", "Surround 7.1", "7.1",
+                         flags="default"),
+            Stream(2, "audio", "DTS", "DTS", "eng", "English", "Surround 5.1", "5.1", flags="core"),
+            Stream(3, "audio", "DD", "Dolby Digital", "eng", "English", "Stereo", "2.0")]
+    s100 += [Stream(4 + k, "audio", "DTS-HD MA" if c == "deu" else "DD", "", c, n, "Surround 5.1", "5.1")
+             for k, (c, n) in enumerate(euro)]
+    s100 += [Stream(12 + k, "subtitle", "PGS", "HDMV PGS", c, n) for k, (c, n) in enumerate([("eng", "English")] + euro)]
+    s101 = [copy.deepcopy(hevc), copy.deepcopy(s100[1]), copy.deepcopy(s100[2]),
+            Stream(3, "audio", "DD", "Dolby Digital", "jpn", "Japanese", "Surround 5.1", "5.1"),
+            Stream(4, "subtitle", "PGS", "HDMV PGS", "jpn", "Japanese"),
+            Stream(5, "subtitle", "PGS", "HDMV PGS", "jpn", "Japanese", flags="forced"),
+            Stream(6, "subtitle", "PGS", "HDMV PGS", "eng", "English")]
+    hp_titles = [Title(0, "00100.mpls", 9658, 91332900864, 37, [2], s100, "feature", True),
+                 Title(1, "00007.mpls", 340, 211617792, 34, list(range(27, 61)), [copy.deepcopy(hevc)], "extra"),
+                 Title(2, "00101.mpls", 9658, 91332900864, 37, [2], s101, "duplicate", variant="Japanese audio")]
+    hp = Disc(drive, "HARRY_POTTER_CHAMBER_SECRETS", "Harry Potter and the Chamber of Secrets", "Blu-ray disc",
+              uhd=True, libredrive=True, size_bytes=int(98.1e9), titles=hp_titles)
     return [
         (sev, dict(media_kind="tv", show="Severance", season=1, disc_number=1)),
         (office, dict(media_kind="tv", show="The Office (US)", season=3, disc_number=2)),
         (pitch, dict(media_kind="movie", show="Pitch Perfect", year=2012)),
+        (hp, dict(media_kind="movie", show="Harry Potter and the Chamber of Secrets", year=2002)),
     ]
 
 
