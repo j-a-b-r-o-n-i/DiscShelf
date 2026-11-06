@@ -31,6 +31,7 @@ def run():
         print(f"gui: skipped (Qt can't start offscreen: {exc})")
         return 0
 
+    from PySide6.QtWidgets import QLabel, QPushButton
     from discshelf import gui
     from discshelf.config import Config
     from discshelf.fake import FakeController
@@ -102,6 +103,28 @@ def run():
     win.queue.dismiss(done_job)
     app.processEvents()
     check(all(i.job.id != done_job.id for i in win.queue.view.items), "Move to History left the disc in the queue")
+
+    # A disc that needs you can be moved to History too, and History can put it back.
+    cards = win.queue.findChildren(gui.NeedsCard)
+    waiting = next((c.item.job for c in cards if not win.is_running(c.item.job)), None)
+    check(waiting is not None and any(True for c in cards if c.item.job is waiting
+                                      for l in c.findChildren(QLabel) if "Move to History" in l.text()), "no Move to History on a Needs you card")
+    if waiting is not None:
+        win.queue.dismiss(waiting)
+        app.processEvents()
+        check(all(i.job.id != waiting.id for i in win.queue.view.items), "the needs-you disc stayed in the queue")
+        win.history.refresh()
+        t = win.history.table
+        live = [t.cellWidget(r, 5) for r in range(t.rowCount())]     # replaced cells linger until deleted
+        backs = [b for w in live if w for b in w.findChildren(QPushButton) if b.text() == "Move to queue"
+                 and b.accessibleName() == f"Move {gui.job_name(waiting)} back to the queue"]
+        check(len(backs) == 1, f"Move to queue buttons for the disc in History: {len(backs)}")
+        if backs:
+            backs[0].click()
+            app.processEvents()
+            win.queue.refresh()
+            check(any(i.job.id == waiting.id and i.section == "needs" for i in win.queue.view.items),
+                  "Move to queue didn't bring the disc back to Needs you")
     check(all(j.stage not in ("done", "plex") for j in [c.job for c in win.rip.queue_cards.values()]),
           "the Rip page's queue still lists finished discs")
 

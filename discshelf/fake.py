@@ -1152,6 +1152,11 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                     e.note = (e.note + " It won't be tried again, so the remux stays as it is.").strip()
         self.save_job(job)
 
+    def undismiss(self, job: Job) -> None:
+        with self.job_lock:
+            job.dismissed = False
+        self.save_job(job)
+
     def free_local(self, job: Job | None = None) -> int:
         freed = 0
         with self.job_lock:

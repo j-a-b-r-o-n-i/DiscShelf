@@ -292,8 +292,16 @@ def run():
             fake.scores[gone.files[0].path] = 50.0
             copy(gone)
             check(wait(lambda: state(gone) == "failed"), "second quality fail")
+            # A copy that failed part-way leaves rsync's partial file in storage; giving up deletes it.
+            gdest = os.path.join(movies, gone.encodes[0].dest_rel)
+            gpart = os.path.join(os.path.dirname(gdest), pipeline.transfer.PARTIAL_DIR, os.path.basename(gdest))
+            os.makedirs(os.path.dirname(gpart))
+            with open(gpart, "wb") as fh:
+                fh.write(b"\0" * 100)
             ctl.dismiss(gone)
             check(state(gone) == "skipped" and ctl.free_local(gone) > 0, "a dismissed failed encode still holds the remux")
+            check(not os.path.exists(os.path.dirname(gpart)), "giving up left the partial copy in storage")
+            check(os.path.isfile(os.path.join(movies, gone.files[0].dest_rel)), "giving up deleted the remux in storage")
 
             # 6. "When to encode": idle waits for the rip, night waits for 1 am and pauses at 7.
             ctl.cfg.av1_when = "idle"
@@ -363,6 +371,31 @@ def run():
             check(os.path.getsize(os.path.join(movies, h2.encodes[0].dest_rel)) == 5000
                   and not os.path.exists(h2.encodes[0].path + ".encode.partial"), "the half-made file was used")
             check(ctl2.recover_encodes() == [], "recovering twice queued something")
+
+            # Closing the app stops ffmpeg without skipping the encode; the next start does it again.
+            ctl3 = controller()
+            ctl, keep_ctl = ctl3, ctl
+            fake.hold.set()
+            quit_job = film("Prometheus")
+            copy(quit_job)
+            qe = quit_job.encodes[0]
+            check(wait(lambda: state(quit_job) == "encoding"), f"quit test didn't start: {state(quit_job)}")
+            ctl3.stop_encoder()
+            fake.hold.clear()
+            check(ctl3._enc_thread is None or not ctl3._enc_thread.is_alive(), "the encoder kept running after quit")
+            check(qe.state == "encoding" and not os.path.exists(qe.path + ".encode.partial"),
+                  f"after quit: {qe.state} {qe.note}")
+            late = film("Sunshine")
+            copy(late)
+            time.sleep(0.1)
+            check(state(late) == "waiting", f"an encode started after quit: {state(late)}")
+            ctl = keep_ctl
+            ctl4 = controller()
+            ctl4.recover_encodes()
+            q4 = next(j for j in ctl4.jobs() if j.id == quit_job.id)
+            l4 = next(j for j in ctl4.jobs() if j.id == late.id)
+            check(wait(lambda: q4.encodes[0].state == "verified" and l4.encodes[0].state == "verified"),
+                  f"after quit and restart: {q4.encodes[0].state} {l4.encodes[0].state}")
 
             # 8. Old jobs without encodes still load, and an EncodeJob round-trips.
             old = to_dict(Job(id="old"))

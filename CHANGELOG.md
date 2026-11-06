@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- A film that comes on two discs keeps its part in its name. The title guessed from the disc
+  name used to drop everything after " - " and any "Part 2", which suits a TV volume
+  ("Show - Season 1") but gave both "Harry Potter and the Deathly Hallows - Part 1" and
+  "- Part 2" the same file name. A film's title now keeps its whole disc name.
+- A film's year is filled in from TheDiscDB, so films are named "Title (Year)" without typing
+  the year. It is looked up before the rip starts, so a film copied while it rips gets it too.
+  The year comes from TheDiscDB's record of the disc, or else from the one film with the
+  same title ("Film - Part 1" finds "Film: Part 1"). When neither is found, or the computer is
+  offline, the year stays empty and can be typed on the Match page as before.
+- A copy no longer replaces a file another disc already copied to the same name. The title
+  fails to copy and says which disc holds that name, so the title, year or version can be
+  changed on the Match page first.
+- Discs in Needs you on the Queue page have "Move to History", like finished discs. History
+  lists them as "Not copied", with "Move to queue" to bring one back.
+- Scrolling the Rip page with the mouse wheel no longer changes a disc's AV1 choice. A wheel
+  turn over that picker could switch it from "Don't make one" to "Make one", which overrides
+  Settings, so an AV1 version was made with AV1 off. The media type, Copy to, and the
+  Settings pickers for HDR and when to encode ignore the wheel too.
+- Closing the app stops a running AV1 encode. ffmpeg used to keep encoding without the app,
+  or stay suspended indefinitely if the encode was paused. The encode isn't skipped; it starts
+  again the next time the app opens.
+- A disc whose rip was cut short by the app closing no longer says "Ripping…" indefinitely.
+  When the app opens, titles MakeMKV finished are kept and prepared, and wait to be copied.
+  A half-written title is deleted and the disc is marked as failed, so it can be ripped again.
+  For a film that was being copied while it ripped, the unfinished copy in storage is deleted,
+  and the film is copied again in full.
+- Stopping an AV1 version while it copies, or giving up on one whose copy failed, deletes
+  the half-copied file rsync kept in the hidden `.discshelf-partial` folder in storage.
 - Jellyfin is supported, and so is having no media server. Settings → Media server picks
   Plex, Jellyfin or none. Jellyfin uses an API key from Dashboard → API Keys, kept in
   secrets.json like the Plex token, and is asked to scan just the new folder. With no media

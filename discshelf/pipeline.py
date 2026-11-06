@@ -12,6 +12,7 @@ it while reading them. No callback (progress, samples) is ever called with it he
 from __future__ import annotations
 
 import collections
+import contextlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy as _copy
 import dataclasses
@@ -34,7 +35,8 @@ from . import (av1, caseocr, classify, config, discdb, discinfo, hdr, makemkv, m
 from . import nasfix, play, ripstats, scanwatch, season
 from .config import Config
 from .jobs import JobStore, now_iso
-from .models import Disc, Drive, EncodeJob, Episode, Job, Match, RippedFile, Sample, Span, Title, TitleProgress
+from .models import (Disc, Drive, EncodeJob, Episode, HdrInfo, Job, Match, RippedFile, Sample, Span, Title,
+                     TitleProgress)
 from . import mediaserver
 from .jellyfin import Jellyfin
 from .mediaserver import ServerError
@@ -51,6 +53,7 @@ SCAN_MIN_SECONDS = 120     # shorter titles are menus and logos; scan and rip mu
 BLURAY_1X = 4.5e6          # bytes per second at 1× Blu-ray speed
 RIP_WINDOW = 20.0          # seconds the rip speed is averaged over; MakeMKV writes in 32 MB blocks
 RIP_SHARE = 0.9            # of the overall progress bar; the rest is what is left to do after the rip
+RIP_STOPPED = "Rip stopped."    # how a stopped rip's status starts; recover_titles leaves those alone
 LOCKED_STATES = ("copying", "checking", "verified")      # the match can no longer change
 WAITING_STATES = ("ripped", "waiting_match", "skipped")  # ripped and not in storage: may be queued for copying
 ENCODE_ACTIVE = ("waiting", "encoding", "paused", "checking", "copying")   # an AV1 version still to be made
@@ -141,6 +144,17 @@ def _remove_av1_files(e: EncodeJob) -> None:
             pass
 
 
+def _remove_partial_copy(dest: str) -> None:
+    """What a stopped or failed copy to dest left in storage for rsync to resume from. Its
+    folder goes too when nothing else is in it."""
+    folder = os.path.join(os.path.dirname(dest), transfer.PARTIAL_DIR)
+    try:
+        os.remove(os.path.join(folder, os.path.basename(dest)))
+        os.rmdir(folder)
+    except OSError:
+        pass
+
+
 def _mark_waiting(tp: TitleProgress, m: Match | None, card_pending: bool = False) -> bool:
     """Say why a ripped title isn't being copied. Returns whether anything changed."""
     if card_pending and m is not None and m.ready:
@@ -206,6 +220,13 @@ class _Meter:
         with self._lock:
             self.points.clear()
             self.rate = 0.0
+
+    def reset(self) -> None:
+        """Forget the total too, when real byte counts replace an estimate."""
+        with self._lock:
+            self.points.clear()
+            self.rate = 0.0
+            self.total = 0
 
     def update(self, total: int) -> None:
         now = time.monotonic()
@@ -436,6 +457,11 @@ def _hours_since(iso: str) -> float | None:
         return None
     now = _dt.datetime.now(t.tzinfo) if t.tzinfo else _dt.datetime.now()
     return (now - t).total_seconds() / 3600
+
+
+def _film_key(title: str) -> str:
+    """A film title compared without case, punctuation or spacing: "Film: Part 1" is "Film - Part 1"."""
+    return re.sub(r"[^0-9a-z]+", "", (title or "").casefold())
 
 
 def _label_stem(label: str) -> str:
@@ -913,6 +939,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         self._enc_thread_lock = threading.Lock()               # taken after job_lock, never before it
         self._enc_wake = threading.Event()
         self._enc_ctrl: _EncodeCtrl | None = None              # the encode running now
+        self._enc_quit = threading.Event()                     # the app is closing; set by stop_encoder
         self.clock = _dt.datetime.now                          # local time, for av1_when "night"; tests replace it
         self.encode_poll = 2.0                                 # seconds between pause checks while encoding
         self.encode_wait = 30.0                                # seconds between checks while the setting holds encodes back
@@ -1000,6 +1027,17 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         name = cls.show_query(disc_name, label)
         return name.title() if name.isupper() else name
 
+    @staticmethod
+    def film_name(disc_name: str, label: str = "") -> str:
+        """The film name to start from: the whole disc name, subtitle and all. show_query cuts
+        " - …" and "Part 2" off a show's volume name, but for a film they tell apart
+        "Harry Potter and the Deathly Hallows - Part 1" and "- Part 2", which otherwise get one
+        file name. A label falls back to show_query, as "MOVIE_NAME_P1" carries no subtitle to keep."""
+        name = re.sub(r"\s+", " ", re.sub(r"_+", " ", disc_name or "")).strip(" -:,")
+        if not name:
+            return Controller.show_name("", label)
+        return name.title() if name.isupper() else name
+
     def cover(self, drive_index: int, season: int | None = None) -> tuple[str, str]:
         """(image path, source) for the disc in the drive: the disc's own artwork (Blu-ray
         BDMV/META), else a TVmaze poster for a TV disc (DVDs carry no artwork). ("", "") when
@@ -1055,7 +1093,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         label = disc.label or disc.name
         job = Job(id=self.store.new_id(), disc_label=label, drive_index=disc.drive.index,
                   min_seconds=SCAN_MIN_SECONDS, media_kind=kind,
-                  show=self.show_name(disc.name, disc.label),
+                  show=self.film_name(disc.name, disc.label) if kind == "movie" else self.show_name(disc.name, disc.label),
                   # Labels use underscores (SEVERANCE_S1_D1), which regex \b treats as word characters.
                   season=_guess(label, r"(?:(?<![A-Z0-9])S|SEASON[ _]?)(\d{1,2})(?!\d)") if kind == "tv" else None,
                   disc_number=_guess(label, r"(?:(?<![A-Z0-9])D|DISC[ _]?)(\d{1,2})(?!\d)"),
@@ -1141,6 +1179,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         if kept:
             job.subtitle_langs = sorted({s.lang for s in kept if s.kind == "subtitle" and s.lang})
         os.makedirs(job.rip_dir, exist_ok=True)
+        # Before the rip, so a film copied while it rips is named with its year.
+        self.fill_film_year(job)
 
         streamable, why = self.stream_possible(job)
         if streamable:
@@ -1201,8 +1241,10 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             return text
 
         def ripping(f: float, _text: str) -> None:
-            if not run.bytes_seen and total_size:
-                run.rip_meter.update(int(max(0.0, min(1.0, f)) * total_size))   # MakeMKV without on_bytes
+            # MakeMKV without on_bytes. Its progress before the first title starts is opening the disc,
+            # not ripping, so it isn't counted as bytes ripped.
+            if not run.bytes_seen and run.started and total_size:
+                run.rip_meter.update(int(max(0.0, min(1.0, f)) * total_size))
             if run.stream_done.is_set():
                 return      # the film is written; the copy check's own text is shown from here on
             run.emit(RIP_SHARE * f, rip_text(f))
@@ -1221,6 +1263,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 self._stream_start(run, ti, path)
 
         def on_bytes(ti: int, _path: str, written: int) -> None:
+            if not run.bytes_seen:
+                run.rip_meter.reset()       # real counts from here on; drop any estimate from progress
             run.bytes_seen = True
             with self.job_lock:
                 tp = _tp(job, ti)
@@ -1292,7 +1336,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         except makemkv.Cancelled:
             self._end_run(run, stop_stream=True)
             with self.job_lock:
-                job.status = "Rip stopped. Start it again to rip from the beginning."
+                job.status = f"{RIP_STOPPED} Start it again to rip from the beginning."
                 self._save(job)
             raise
         except Exception as e:
@@ -1445,24 +1489,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         with self.job_lock:
             f = _file(job, ti)
             path = f.path
-        self._say(run, 0.0, f"Keeping the chosen languages in title {ti}")
-        run.span("languages", ti)
-        try:
-            hdr.remux_tracks(path, path, job.audio_langs, job.subtitle_langs, self.cfg)
-        finally:
-            run.span("languages", ti, end=True)
-        self._say(run, 0.3, f"Checking HDR formats in title {ti}")
-        info = hdr.probe(path, self.cfg)
-        if info.dolby_vision and info.dv_profile == 7:
-            info.dv_layer_kind = hdr.dv_layer_kind(path, self.cfg)
-        converted = False
-        if not job.hdr_policy.is_raw and info.dolby_vision:
-            self._say(run, 0.5, f"Applying the HDR setting to title {ti}")
-            hdr.apply_policy(path, job.hdr_policy, info, workdir, self.cfg)
-            layer = info.dv_layer_kind
-            info = hdr.probe(path, self.cfg)
-            info.dv_layer_kind = layer      # the disc's layer, which says whether the conversion lost anything
-            converted = True
+        info, converted = self._prepare(job, ti, path, workdir, lambda frac, text: self._say(run, frac, text),
+                                        lambda end: run.span("languages", ti, end=end))
         size = os.path.getsize(path)
         with self.job_lock:
             f.hdr, f.size_bytes = info, size
@@ -1473,6 +1501,31 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 tp.total_bytes = tp.ripped_bytes = size
             run.posted.add(ti)
             self._save(job)
+
+    def _prepare(self, job: Job, ti: int, path: str, workdir: str,
+                 say: Callable[[float, str], None] = lambda _f, _t: None,
+                 languages: Callable[[bool], None] = lambda _end: None) -> tuple[HdrInfo, bool]:
+        """Keep the chosen languages in a ripped title and apply the HDR setting. Returns its HDR
+        details and whether it was converted. languages(end) marks the language step on the timeline."""
+        say(0.0, f"Keeping the chosen languages in title {ti}")
+        languages(False)
+        try:
+            hdr.remux_tracks(path, path, job.audio_langs, job.subtitle_langs, self.cfg)
+        finally:
+            languages(True)
+        say(0.3, f"Checking HDR formats in title {ti}")
+        info = hdr.probe(path, self.cfg)
+        if info.dolby_vision and info.dv_profile == 7:
+            info.dv_layer_kind = hdr.dv_layer_kind(path, self.cfg)
+        converted = False
+        if not job.hdr_policy.is_raw and info.dolby_vision:
+            say(0.5, f"Applying the HDR setting to title {ti}")
+            hdr.apply_policy(path, job.hdr_policy, info, workdir, self.cfg)
+            layer = info.dv_layer_kind
+            info = hdr.probe(path, self.cfg)
+            info.dv_layer_kind = layer      # the disc's layer, which says whether the conversion lost anything
+            converted = True
+        return info, converted
 
     def _copy_if_ready(self, run: "_Run", ti: int) -> None:
         job = run.job
@@ -1753,6 +1806,10 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             if f is None:
                 f = RippedFile(title_index=ti, path=path)
                 job.files.append(f)
+            if rel and self._claimed_by(job, rel) is not None:
+                f.path = path
+                self._save(job)
+                return      # not streamed: _stream_finish's ordinary copy reports the clash
             f.path, f.dest_rel, f.state = path, rel, "copying"
             self._freeze(job, ti)
             tp = _tp(job, ti)
@@ -1849,6 +1906,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             titles = [t for t in job.titles if not chosen or t.index in chosen]
         if self._layout(job) == "movie":
             matches = self._discdb_matches(job, titles, []) or match.feature_match(titles)
+            self.fill_film_year(job)
         else:
             if show_id is None:
                 raise ValueError("Pick the show from the search results first.")
@@ -1874,6 +1932,34 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             self.apply_cards(job)
             return job.matches
         return self.update_matches(job, matches)
+
+    def fill_film_year(self, job: Job) -> int | None:
+        """Fill in a film's year from TheDiscDB when it isn't set, so the film's folder and file
+        are named "Title (Year)", which Plex and Jellyfin match on. The year comes from TheDiscDB's
+        record of this exact disc, else from the one film whose title is the job's title
+        (punctuation aside, so "Film - Part 1" finds "Film: Part 1"). Offline or not found, the
+        year stays empty to be typed on the Match page. Returns the year now set, or None."""
+        if job.year or self._layout(job) != "movie" or not job.show.strip():
+            return job.year
+        self._discdb_matches(job, [], [])                 # looks the disc up once per job
+        hit = self._discdb_hits.get(job.id)
+        year = hit.year if hit and hit.year and hit.media_type.lower() == "movie" else None
+        if year is None:
+            try:
+                nodes = self.discdb.search(job.show)
+            except discdb.DiscDbError:
+                return None
+            want = _film_key(job.show)
+            years = {int(n["year"]) for n in nodes
+                     if (n.get("type") or "").lower() == "movie" and str(n.get("year") or "").isdigit()
+                     and _film_key(n.get("title") or "") == want}
+            year = years.pop() if len(years) == 1 else None
+        if year:
+            with self.job_lock:
+                if not job.year:
+                    job.year = year
+                    self._save(job)
+        return job.year
 
     def _discdb_matches(self, job: Job, titles: list[Title], episodes: list) -> list[Match] | None:
         """Matches from TheDiscDB when it has this exact disc, else None. Looked up once per job;
@@ -1989,6 +2075,24 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             self._show_dirs[key] = hit
         return hit[1]
 
+    def _claimed_by(self, job: Job, rel: str) -> Job | None:
+        """Another disc whose copy in storage already has this name, so copying would replace that
+        film or episode. Two discs of a two-part film can end up with one name if the title is
+        left as it was guessed."""
+        for other in self.jobs():
+            if other.id == job.id or other.destination != job.destination:
+                continue
+            if any(f.state == "verified" and f.dest_rel and f.dest_rel.casefold() == rel.casefold()
+                   for f in other.files):
+                return other
+        return None
+
+    def _taken_text(self, other: Job, rel: str) -> str:
+        what = other.show or other.disc_label or "another disc"
+        return (f"{posixpath.basename(rel)} is already in storage, copied from {what} "
+                f"(disc {other.disc_label}). Change the title, year or version on the Match page "
+                f"so this disc gets its own name, then copy again.")
+
     def plan_paths(self, job: Job) -> list[RippedFile]:
         with self.job_lock:
             paths = self._dest_map(job, strict=True)
@@ -2015,6 +2119,14 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             rel = self._dest_map(job, strict=True).get(f.title_index)
             if not rel:
                 raise ValueError(f"Title {f.title_index} isn't matched to anything, so it has no name in storage.")
+            other = self._claimed_by(job, rel)
+            if other is not None:
+                tp = _tp(job, f.title_index)
+                f.state = "failed"
+                if tp is not None:
+                    tp.state, tp.note = "failed", self._taken_text(other, rel)
+                self._save(job)
+                raise FileExistsError(self._taken_text(other, rel))
             tp = _tp(job, f.title_index)
             if tp is None:
                 tp = TitleProgress(f.title_index, total_bytes=f.size_bytes, ripped_bytes=f.size_bytes)
@@ -2222,7 +2334,14 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         rewritten. Each one gets the language step it missed. Returns the jobs changed."""
         out = []
         for job in self.jobs():
-            if job.id in self._runs or job.stage not in ("match", "failed") or not os.path.isdir(job.rip_dir):
+            if job.id in self._runs:
+                continue
+            if job.stage == "rip" and job.titles_progress and not job.status.startswith(RIP_STOPPED):
+                kept = self._recover_rip(job)
+                if kept:
+                    out.append((job, kept))
+                continue
+            if job.stage not in ("match", "failed") or not os.path.isdir(job.rip_dir):
                 continue
             have = {f.title_index for f in job.files}
             names = os.listdir(job.rip_dir)
@@ -2251,6 +2370,88 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 self._save(job)
                 out.append((job, found))
         return out
+
+    def _recover_rip(self, job: Job) -> list[int]:
+        """A disc the app closed on while it ripped: its job still says it's ripping, though
+        nothing is. MakeMKV only reports a title once it has written all of it, so a title in
+        job.files at its recorded size is complete; it's prepared if it wasn't yet and waits to
+        be copied. A half-written title is deleted, as a stopped rip does, and the disc then
+        needs ripping again. Returns the titles kept that weren't in storage yet."""
+        def complete(f: RippedFile) -> bool:
+            try:
+                return f.size_bytes > 0 and os.path.getsize(f.path) == f.size_bytes
+            except OSError:
+                return False
+
+        done = {f.title_index: f for f in job.files if complete(f)}
+        keep = {os.path.abspath(f.path) for f in done.values()}
+        try:
+            names = os.listdir(job.rip_dir)
+        except OSError:
+            names = []
+        ours = {t.index for t in job.titles} | {tp.title_index for tp in job.titles_progress}
+        for name in names:
+            path = os.path.abspath(os.path.join(job.rip_dir, name))
+            m = re.search(r"_t(\d+)\.mkv$", name, re.IGNORECASE)
+            title = m is not None and int(m.group(1)) in ours
+            if path not in keep and (title or name.endswith(".discshelf-tmp.mkv")):
+                with contextlib.suppress(OSError):
+                    os.remove(path)
+        shutil.rmtree(os.path.join(job.rip_dir, ".work"), ignore_errors=True)
+
+        kept, problems = [], []
+        job.files = [f for f in job.files if f.title_index in done]
+        for tp in job.titles_progress:
+            f = done.get(tp.title_index)
+            tp.rip_rate = tp.copy_rate = 0.0
+            if f is None:
+                tp.state, tp.note = "failed", "The app closed before this title finished ripping."
+                tp.ripped_bytes = tp.copied_bytes = tp.checked_bytes = 0
+                continue
+            if f.state == "verified":
+                tp.state, tp.note = "verified", ""
+                continue
+            if job.copy_mode == "stream" and f.dest_rel:
+                # The copy made while it ripped never finished, and an ordinary copy starts afresh.
+                with contextlib.suppress(OSError):
+                    os.remove(os.path.join(job.destination, f.dest_rel) + follow.PARTIAL_SUFFIX)
+            f.state = "converted" if f.state == "converted" else "ripped"
+            tp.state, tp.note = "ripped", ""
+            tp.total_bytes = tp.ripped_bytes = f.size_bytes
+            tp.copied_bytes = tp.checked_bytes = 0
+            if f.hdr is None:
+                try:
+                    if job.copy_mode == "stream":
+                        f.hdr = hdr.probe(f.path, self.cfg)      # MakeMKV already kept only the chosen languages
+                    else:
+                        workdir = os.path.join(job.rip_dir, ".work")
+                        os.makedirs(workdir, exist_ok=True)
+                        f.hdr, converted = self._prepare(job, f.title_index, f.path, workdir)
+                        shutil.rmtree(workdir, ignore_errors=True)
+                        if converted:
+                            f.state = "converted"
+                        f.size_bytes = tp.total_bytes = tp.ripped_bytes = os.path.getsize(f.path)
+                except Exception as e:  # noqa: BLE001 -- told on the title; the disc can be ripped again
+                    tp.state, tp.note = "failed", f"It couldn't be prepared: {e}"
+                    problems.append(e)
+                    continue
+            kept.append(tp.title_index)
+
+        lost = sum(1 for tp in job.titles_progress if tp.title_index not in done)
+        if lost or problems:
+            job.stage = "failed"
+            if lost == len(job.titles_progress):
+                job.status = "The app closed while this disc was ripping, before any title finished. Rip it again."
+            elif lost:
+                job.status = (f"The app closed while this disc was ripping, and {_plural(lost, 'title')} didn't "
+                              "finish. Rip the disc again to get them.")
+            else:
+                job.status = f"Rip failed: {problems[0]}"
+        else:
+            job.stage, job.progress = "match", 1.0
+            job.status = _match_next(len(job.files), self._layout(job) != "movie")
+        self._save(job)
+        return kept
 
     def cleanup(self, apply: bool = True) -> list[str]:
         """Delete the local rips the clean-up setting says are due. Uses free_local's rule: only a
@@ -2372,12 +2573,26 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             if live is not None and live is not job:
                 live.dismissed = True
             job.encodes = live.encodes if live is not None else job.encodes
+            partials = []
             for e in job.encodes:
                 if e.state == "failed":
                     _remove_av1_files(e)
+                    if e.dest_rel:
+                        partials.append(os.path.join(job.destination, e.dest_rel))
                     e.state, e.encoded = "skipped", False
                     e.note = (e.note + " It won't be tried again, so the remux stays as it is.").strip()
             job.dismissed = True
+            self._save(job)
+        for dest in partials:
+            _remove_partial_copy(dest)
+
+    def undismiss(self, job: Job) -> None:
+        """Put a job moved to History back in the queue, where it shows what it still needs."""
+        with self.job_lock:
+            live = self._enc_jobs.get(job.id)
+            for j in {id(job): job, id(live): live}.values():
+                if j is not None:
+                    j.dismissed = False
             self._save(job)
 
     def free_local(self, job: Job | None = None) -> int:
@@ -2560,6 +2775,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
 
     def _kick_encoder(self) -> None:
         """Start the encoder thread if it isn't running, and wake it."""
+        if self._enc_quit.is_set():
+            return
         with self._enc_thread_lock:
             if self._enc_thread is None or not self._enc_thread.is_alive():
                 self._enc_thread = threading.Thread(target=self._encode_loop, daemon=True, name="discshelf-encoder")
@@ -2600,7 +2817,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         while True:
             self._enc_wake.clear()
             with self.job_lock:
-                pick = self._next_encode()
+                pick = None if self._enc_quit.is_set() else self._next_encode()
                 if pick is None:
                     with self._enc_thread_lock:
                         if self._enc_thread is threading.current_thread():
@@ -2681,12 +2898,21 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                 except OSError:
                     pass        # the estimates stay as they were
         except (av1.Cancelled, transfer.Cancelled):
+            if self._enc_quit.is_set():
+                # The app is closing, not you stopping it: recover_encodes queues it again next time.
+                with self.job_lock:
+                    e.fps, e.eta_seconds = 0.0, None
+                    self._save(job)
+                return
             with self.job_lock:
                 _remove_av1_files(e)
                 e.state, e.encoded, e.held, e.finished = "skipped", False, False, now_iso()
                 e.fps, e.eta_seconds = 0.0, None
                 e.note = "Stopped. The remux stays in storage as it is."
                 self._save(job)
+                dest = os.path.join(job.destination, e.dest_rel) if e.dest_rel else ""
+            if dest:
+                _remove_partial_copy(dest)
         except Exception as x:  # noqa: BLE001 -- shown on the queue card; the encoder carries on with the next
             with self.job_lock:
                 if e.state in ("encoding", "paused"):
@@ -2850,6 +3076,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
     def stop_encode(self, job: Job) -> bool:
         """Stop this disc's running encode and skip the rest of its AV1 versions, failed ones
         included. The remuxes are untouched. Returns whether anything changed."""
+        partials: list[str] = []
         with self.job_lock:
             job = self._live(job)
             changed = False
@@ -2858,6 +3085,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                     self._enc_ctrl.cancel.set()     # the encoder thread marks it skipped
                     changed = True
                 elif e.state in ("waiting", "paused", "failed"):
+                    if e.state == "failed" and e.dest_rel:
+                        partials.append(os.path.join(job.destination, e.dest_rel))
                     _remove_av1_files(e)
                     e.state, e.held, e.encoded, e.finished = "skipped", False, False, now_iso()
                     e.note = "Skipped. The remux stays in storage as it is."
@@ -2865,8 +3094,24 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             if changed:
                 self._save(job)
                 self._forget_idle()
+        for dest in partials:
+            _remove_partial_copy(dest)
         self._enc_wake.set()
         return changed
+
+    def stop_encoder(self, timeout: float = 5.0) -> None:
+        """For quitting: stop the running encode and its ffmpeg, which would otherwise carry on
+        without the app, and start no more. Unlike stop_encode nothing is skipped; recover_encodes
+        queues it again on the next start."""
+        self._enc_quit.set()
+        with self.job_lock:
+            ctrl = self._enc_ctrl
+        if ctrl is not None:
+            ctrl.cancel.set()
+        self._enc_wake.set()
+        th = self._enc_thread
+        if th is not None:
+            th.join(timeout)
 
     def retry_encode(self, job: Job) -> int:
         """Queue this disc's failed AV1 versions again, at the back of the queue. One whose file

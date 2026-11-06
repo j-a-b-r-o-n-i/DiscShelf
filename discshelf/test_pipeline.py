@@ -176,6 +176,8 @@ def make_fake_rip(log, hold=None):
         paths = []
 
         def work():
+            # MakeMKV's first progress bar is opening the disc, and it reaches 100% before any title starts.
+            progress(1.0, "Opening the disc")
             for n, ti in enumerate(titles):
                 p = os.path.join(out_dir, f"Test_t{ti:02d}.mkv")
                 with open(p, "wb") as fh:
@@ -292,6 +294,9 @@ def run_overlap():
             check([p for _, p in preview][:1] == ["Test Show/Season 01/Test Show - S01E01 - Episode 1.mkv"], f"preview: {preview}")
             th.join(30)
             check(not errors, f"rip raised: {errors}")
+            rip_totals = [x.total for x in samples if x.kind == "rip"]
+            check(rip_totals and all(t % CHUNK == 0 for t in rip_totals),
+                  f"progress from opening the disc was counted as bytes ripped: {rip_totals[:5]}")
             check(job.copy_mode == "per_title" and not job.copy_mode_note, f"mode: {job.copy_mode} {job.copy_mode_note!r}")
             check(log.get("t0_before_t2_done") is True, "title 0 wasn't on the NAS before title 2 finished ripping")
             check(job.stage == "done", f"stage after an overlapped rip: {job.stage} ({job.status})")

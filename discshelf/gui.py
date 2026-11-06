@@ -1816,7 +1816,7 @@ class RipPage(QWidget):
         self.no_uhd.hide()
         video.lay.addWidget(self.no_uhd)
         # A smaller AV1 second version (4K discs only); the remux above stays RAW.
-        self.av1_combo = QComboBox()
+        self.av1_combo = NoWheelComboBox()
         self.av1_combo.setMinimumWidth(300)
         self.av1_combo.activated.connect(self.av1_picked)
         self.av1_row = QWidget()
@@ -1856,10 +1856,10 @@ class RipPage(QWidget):
         self.subs_card.lay.addStretch(1)
         dest = Card(spacing=10)
         dest.lay.addWidget(label("Copy to", "h2"))
-        self.kind_combo = QComboBox()
+        self.kind_combo = NoWheelComboBox()
         self.kind_combo.setAccessibleName("Media type")
         self.kind_combo.activated.connect(self.kind_changed)
-        self.dest_combo = QComboBox()
+        self.dest_combo = NoWheelComboBox()
         self.dest_combo.setAccessibleName("Copy to")
         self.dest_combo.activated.connect(self.dest_changed)
         for c in (self.kind_combo, self.dest_combo):
@@ -3353,6 +3353,10 @@ class MatchPage(QWidget):
         def done(matches):
             self.set_matches(job, list(matches))
             if self.job is job:
+                if job.year and not self.year.value():      # a film's year found on TheDiscDB
+                    self.year.blockSignals(True)
+                    self.year.setValue(job.year)
+                    self.year.blockSignals(False)
                 self.fill_table()
                 self.refresh_season()
 
@@ -4935,6 +4939,11 @@ class NeedsCard(QFrame):
             self.copy_btn = button(text, primary=not item.checks, small=True)
             self.copy_btn.clicked.connect(lambda: page.copy_ready(job))
             hl.addWidget(self.copy_btn)
+        if not win.is_running(job):
+            hist = link("Move to History", lambda: page.dismiss(job))
+            hist.setToolTip("Takes the disc out of the queue. The local rip stays where it is, and "
+                            "History has Move to queue to bring the disc back.")
+            hl.addWidget(hist)
         head.setLayout(hl)
         lay.addWidget(head)
         self.rows: dict[int, tuple[QButtonGroup, list]] = {}
@@ -5653,11 +5662,12 @@ class HistoryPage(QWidget):
         col = vbox(spacing=20, margins=(24, 24, 24, 24))
         inner.setLayout(col)
         col.addLayout(vbox(label("History", "h1"),
-                           label("Discs that finished copying, and any that stopped with an error.", "muted"),
+                           label("Discs that finished copying, any that stopped with an error, and any moved here from "
+                                 "Needs you.", "muted"),
                            spacing=6))
         card = Card(margins=(0, 0, 0, 0), spacing=0)
         self.table = plain_table(["Date", "Disc", "Copied to", "Files", "Result", ""])
-        for c, w in enumerate((150, 200, 220, 60, 300, 140)):
+        for c, w in enumerate((150, 200, 220, 60, 300, 260)):
             self.table.setColumnWidth(c, w)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.empty = label("No disc has finished yet.", "muted")
@@ -5669,7 +5679,7 @@ class HistoryPage(QWidget):
         self.setLayout(vbox(scroll_page(inner)))
 
     def refresh(self):
-        jobs = [j for j in self.win.job_list if j.stage in ("done", "failed")]
+        jobs = [j for j in self.win.job_list if j.stage in ("done", "failed") or j.dismissed]
         t = self.table
         t.setRowCount(0)
         mono = QFont(self.win.mono)
@@ -5684,7 +5694,8 @@ class HistoryPage(QWidget):
             n = sum(1 for f in job.files if f.dest_rel) or len(job.files)
             t.setItem(r, 3, item(str(n), mono))
             ok = job.stage == "done"
-            c = chip("Copied and checked" if ok else "Failed", "good" if ok else "bad")
+            c = chip("Copied and checked", "good") if ok else \
+                chip("Failed", "bad") if job.stage == "failed" else chip("Not copied", "warn")
             parts = [c]
             if not ok and job.status:
                 s = label(job.status, "small")
@@ -5698,11 +5709,26 @@ class HistoryPage(QWidget):
             b = button("Open folder", small=True)
             b.setAccessibleName(f"Open the folder for {job_name(job)}")
             b.clicked.connect(lambda _c=False, job=job: self.open_folder(job))
-            t.setCellWidget(r, 5, cell(b, margins=(8, 4, 20, 4)))
+            buttons = [b]
+            if job.dismissed and job.stage != "done" and hasattr(self.win.ctl, "undismiss"):
+                back = button("Move to queue", small=True)
+                back.setAccessibleName(f"Move {job_name(job)} back to the queue")
+                back.clicked.connect(lambda _c=False, job=job: self.undismiss(job))
+                buttons.insert(0, back)
+            t.setCellWidget(r, 5, cell(*buttons, margins=(8, 4, 20, 4)))
             t.setRowHeight(r, 52)
         fit_table(t)
         t.setVisible(bool(jobs))
         self.empty.setVisible(not jobs)
+
+    def undismiss(self, job: Job):
+        try:
+            self.win.ctl.undismiss(job)
+        except Exception as exc:
+            self.win.error("Couldn't move the disc to the queue", str(exc),
+                           "Check there is free space in your home folder.")
+            return
+        self.win.refresh_jobs()
 
     def open_folder(self, job: Job):
         folder = show_folder_of(job)
@@ -6694,7 +6720,7 @@ class SettingsPage(QWidget):
                                           "page.", "small", wrap=True), spacing=4), None, self.hdr.badges,
                                spacing=16))
         hdr.lay.addWidget(self.hdr.box)
-        self.keep = QComboBox()
+        self.keep = NoWheelComboBox()
         self.keep.addItem("Keep all of them in one file (HDR10, Dolby Vision, HDR10+)", "all")
         self.keep.addItem("Keep HDR10 only", "hdr10")
         self.keep.setMaximumWidth(460)
@@ -6813,7 +6839,7 @@ class SettingsPage(QWidget):
         ab.addWidget(Option(self.av1_check, "Check the quality before copying",
                             "Compares 6 short clips with the disc and scores them out of 100. Below 93, the AV1 "
                             "version isn't copied and the Queue page says so."))
-        self.av1_when = QComboBox()
+        self.av1_when = NoWheelComboBox()
         for key, text in (("after", "Right after the copy, at low priority"), ("idle", "Only when nothing is ripping"),
                           ("night", "Overnight, 1 am to 7 am")):
             self.av1_when.addItem(text, key)
@@ -8305,6 +8331,8 @@ class MainWindow(QMainWindow):
         self.settings.poll_timer.stop()
         for w in list(self.tasks.values()):
             w.wait(5000)
+        if hasattr(self.ctl, "stop_encoder"):
+            self.ctl.stop_encoder()     # ffmpeg would otherwise keep encoding, or stay paused, after the app closes
         super().closeEvent(event)
 
 
