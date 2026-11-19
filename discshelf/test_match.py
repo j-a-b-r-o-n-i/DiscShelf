@@ -94,6 +94,10 @@ def run():
     ms = feature_match([T(0, 10, "unknown"), T(1, 115, "unknown")])
     check(ms[1].target == "feature" and ms[1].confidence == "check", f"fallback to longest: {ms}")
     check(feature_match([T(0, 10, selected=False)])[0].target == "skip", "nothing selected")
+    # A holiday disc of two TV specials: the longer is the film, the other is flagged as maybe another film.
+    ms = feature_match([T(0, 25.3), T(2, 24.3)])
+    check([(m.target, m.confidence) for m in ms] == [("feature", "check"), ("extra", "check")], f"specials: {ms}")
+    check("Another film" in ms[1].note, f"specials note: {ms[1].note}")
 
     # 11-minute cartoons against TVmaze's 15-minute slot fit.
     ms = match_titles([T(1, 11.7), T(2, 11.9), T(3, 11.8)], eps(15, 15, 15))

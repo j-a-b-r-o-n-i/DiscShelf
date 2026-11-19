@@ -6,6 +6,9 @@ Movie:  Title (2012)/Title (2012).mkv, another version adds " - 2160p" before th
         an edition is "Title (2012) {edition-Director's Cut}.mkv"
 Extras: <show or movie folder>/Featurettes/Name.mkv (one of the folder names Plex knows)
 
+A disc can hold more than one film, such as the TV specials on a holiday disc: a title
+matched to another film is named from its match, and the disc's extras go with its first film.
+
 Plex reads only the show, the SxxEyy code and the year; it ignores everything after the
 code, so the episode name, a version and a "[1080p]" tag are for people reading the folder.
 Two files with the same code in one season folder become two versions of one episode.
@@ -73,6 +76,11 @@ def clean(s: str, scheme: Scheme | None = None) -> str:
     if (scheme or DEFAULT).safe_chars:
         return safe_name(s)
     return re.sub(r"\s+", " ", _NEVER.sub("", s or "")).strip()
+
+
+def film_key(title: str) -> str:
+    """A film title compared without case, punctuation or spacing: "Film: Part 1" is "Film - Part 1"."""
+    return re.sub(r"[^0-9a-z]+", "", (title or "").casefold())
 
 
 def show_folder(show: str, year: int | None = None, scheme: Scheme | None = None) -> str:
@@ -221,7 +229,8 @@ def relpath_for(job: Job, match: Match, layout: str, scheme: Scheme | None = Non
         return extra_relpath(folder, match.extra_name, match.extra_folder, scheme=scheme)
     quality = title_quality(job, match.title_index)
     if layout == "movie" or match.target == "feature":
-        return movie_relpath(job.show, job.year, job.version, edition=match.version, quality=quality, scheme=scheme)
+        title, year = (match.film, match.film_year) if match.film.strip() else (job.show, job.year)
+        return movie_relpath(title, year, job.version, edition=match.version, quality=quality, scheme=scheme)
     if match.target == "episode":
         if match.episode is None:
             raise ValueError(f"Title {match.title_index} is set as an episode but has no episode chosen.")

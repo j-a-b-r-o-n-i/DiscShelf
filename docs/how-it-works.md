@@ -245,6 +245,10 @@ episode by the show folder, the season and the `S01E01` code, and ignore the res
   two films. With Jellyfin, or no media server, an edition is named as a version instead,
   `Aliens (1986) - Special Edition.mkv`, which Jellyfin lists under the one film.
   Every edition and version of a film sits in the one folder.
+- **More than one film on a disc**, such as the two TV specials on a holiday disc: a title
+  set to "Another film…" on the Match page gets that film's name and year, and its own
+  folder. The year is looked up on TheDiscDB when it's left empty. The disc's extras go with
+  its first film.
 - **Characters a Windows share can't store** are replaced by default: a colon becomes
   " - ", and `? * " < > |` are removed. Turned off, only `/` is removed.
 

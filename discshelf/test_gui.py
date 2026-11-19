@@ -448,6 +448,39 @@ def run():
     win.close()
     app.processEvents()
 
+    # A holiday disc of two TV specials goes to films: the second special is named as another film.
+    from discshelf.models import Match
+    movies = ctl.cfg.destination("movie").path
+    sp = [Title(i, f"{70 + i:05d}.mpls", 25 * 60 - i * 20, int(1e9), 5, kind="episode", selected=True) for i in (1, 2)]
+    hjob = Job(id="pumpkin", disc_label="ITS_THE_GREAT_PUMPKIN", titles=sp, media_kind="movie", destination=movies,
+               show="It's the Great Pumpkin, Charlie Brown", year=1966, stage="match",
+               matches=[Match(1, "feature", confidence="check"), Match(2, "extra", extra_name="Title 02")])
+    win.match.open(hjob)
+    app.processEvents()
+    combo = win.match.table.cellWidget(1, 2).findChild(gui.NoWheelComboBox)
+    check(combo is not None and combo.findData("film_new") >= 0, "no Another film… choice for a film disc")
+
+    class FilmDialog:
+        def __init__(self, _parent, name, year):
+            self.name = SimpleNamespace(text=lambda: "You're Not Elected, Charlie Brown")
+            self.year = SimpleNamespace(value=lambda: 0)
+
+        def exec(self):
+            return gui.QDialog.DialogCode.Accepted
+
+    real_film, gui.FilmDialog = gui.FilmDialog, FilmDialog
+    try:
+        combo.setCurrentIndex(combo.findData("film_new"))
+        win.match.pick(hjob.matches[1], combo)
+    finally:
+        gui.FilmDialog = real_film
+    second = lambda: next(m for m in hjob.matches if m.title_index == 2)  # noqa: E731
+    check(second().target == "feature" and second().film == "You're Not Elected, Charlie Brown",
+          f"the second special isn't a film: {second()}")
+    check(wait(lambda: second().film_year == 1972), f"the second film's year wasn't looked up: {second()}")
+    combo = win.match.table.cellWidget(1, 2).findChild(gui.NoWheelComboBox)
+    check(combo.currentText() == "Film · You're Not Elected, Charlie Brown (1972)", f"film choice: {combo.currentText()}")
+
     for f in failures:
         print("FAIL:", f)
     print(f"gui: {'ok' if not failures else f'{len(failures)} failure(s)'}")

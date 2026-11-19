@@ -137,6 +137,9 @@ class Match:
     held: str = ""               # another title or file holds the same episode (season.py): this sentence
                                  # leads the note, and the title isn't copied until that's settled
     held_was: str = ""           # the confidence it had before it was held, given back afterwards
+    film: str = ""               # a "feature" that is another film than the disc's, such as the second
+                                 # TV special on a holiday disc; "" means the disc's film (Job.show)
+    film_year: int | None = None # that film's year; only read when film is set
 
     @property
     def ready(self) -> bool:

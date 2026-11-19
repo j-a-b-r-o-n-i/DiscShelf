@@ -952,6 +952,10 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
     def _save(self, job: Job) -> None:
         self.save_job(job)
 
+    def film_year(self, title: str) -> int | None:
+        self._sleep(steps=2)
+        return {"you're not elected, charlie brown": 1972}.get(title.strip().casefold())
+
     def match_from_list(self, job: Job, show_id: int, text: str) -> list[Match]:
         names = parse_episode_list(text)
         if not names:

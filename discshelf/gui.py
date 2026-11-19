@@ -2444,6 +2444,32 @@ class ExtraDialog(QDialog):
         self.setMinimumWidth(380)
 
 
+class FilmDialog(QDialog):
+    """Names a title as another film than the disc's, such as the second special on a holiday disc."""
+
+    def __init__(self, parent, name: str, year: int | None):
+        super().__init__(parent)
+        self.setWindowTitle("Save as another film")
+        self.name = QLineEdit(name)
+        self.name.setPlaceholderText("You're Not Elected, Charlie Brown")
+        self.year = field_spin()
+        self.year.setRange(0, 2100)
+        self.year.setSpecialValueText("—")
+        self.year.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.year.setValue(year or 0)
+        hint = label("It gets its own folder in storage. Leave the year empty to look it up on TheDiscDB.",
+                     "muted", wrap=True)
+        buttons = QDialogButtonBox()
+        ok = buttons.addButton("Save as a film", QDialogButtonBox.ButtonRole.AcceptRole)
+        ok.setProperty("primary", "true")
+        buttons.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        self.setLayout(vbox(field("Name of the film", self.name), field("Year", self.year), hint,
+                            buttons, spacing=14, margins=(20, 20, 20, 20)))
+        self.setMinimumWidth(420)
+
+
 class EpisodeListDialog(QDialog):
     IMAGES = (".jpg", ".jpeg", ".png", ".webp", ".heic", ".bmp", ".tif", ".tiff")
 
@@ -2941,6 +2967,8 @@ class MatchPage(QWidget):
             t.setItem(r, 1, item(fmt_len(title.duration_s) if title else "—", mono))
             locked = m.title_index in self._locked
             want = m.target if m.target in ("feature", "extra", "skip") else None
+            if m.target == "feature" and m.film:
+                want = "film_other"
             if m.target == "episode" and m.episode:
                 want = f"episode:{m.episode.season}:{m.episode.number}:{m.episode_end or ''}"
             warn = m.confidence == "check" and not m.confirmed and not locked
@@ -2949,6 +2977,10 @@ class MatchPage(QWidget):
                 combo.setMaxVisibleItems(12)
                 combo.addItem(f"Film · {job.show} ({job.year})" if job.year else f"Film · {job.show or 'untitled'}",
                               "feature")
+                if m.target == "feature" and m.film:
+                    combo.addItem(f"Film · {m.film} ({m.film_year})" if m.film_year else f"Film · {m.film}",
+                                  "film_other")
+                combo.addItem("Another film…", "film_new")
                 if m.target == "extra":
                     combo.addItem(f"Extra · {m.extra_name}", "extra")
                 combo.addItem("Extra…", "extra_new")
@@ -3214,7 +3246,15 @@ class MatchPage(QWidget):
         if m.title_index in self._locked:
             undo()
             return
-        extra = None
+        if kind == "film_other":         # the film it already is
+            return
+        extra = film_new = None
+        if kind == "film_new":
+            dlg = FilmDialog(self, m.film, m.film_year)
+            if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.name.text().strip():
+                undo()
+                return
+            film_new = (dlg.name.text().strip(), dlg.year.value() or None)
         if kind == "extra_new":
             dlg = ExtraDialog(self, m.extra_name or (f"Title {m.title_index:02d}"), m.extra_folder)
             if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.name.text().strip():
@@ -3223,7 +3263,13 @@ class MatchPage(QWidget):
             extra = (dlg.name.text().strip(), dlg.folder.currentText())
         eps = self.season_eps()
         new = _copy.deepcopy(m)
-        if extra is not None:
+        if film_new is not None:
+            new.target, new.episode, new.episode_end = "feature", None, None
+            new.film, new.film_year = film_new
+            if naming.film_key(new.film) == naming.film_key(self.job.show):
+                # The disc's own film, typed again.
+                new.film, new.film_year = "", None
+        elif extra is not None:
             new.target, new.extra_name, new.extra_folder = "extra", extra[0], extra[1]
             new.episode, new.episode_end = None, None
         elif kind == "extra":
@@ -3232,6 +3278,7 @@ class MatchPage(QWidget):
             new.target = "skip"
         elif kind == "feature":
             new.target, new.episode, new.episode_end = "feature", None, None
+            new.film, new.film_year = "", None
         elif kind == "episode":
             season, num = int(data[1]), int(data[2])
             end = int(data[3]) if len(data) > 3 and data[3] else None
@@ -3243,6 +3290,29 @@ class MatchPage(QWidget):
             matches = [new if x.title_index == m.title_index else x for x in self.job.matches]
         self.set_matches(self.job, matches)
         self.fill_table()
+        if new.target == "feature" and new.film and not new.film_year:
+            self.look_up_film_year(new.title_index, new.film)
+
+    def look_up_film_year(self, ti: int, film: str):
+        """Fill in the year of another film on the disc from TheDiscDB, so its folder is "Title (Year)"."""
+        job = self.job
+
+        def found(year):
+            if not year:
+                return
+            with self.win.lock():
+                m = next((x for x in job.matches if x.title_index == ti), None)
+                if m is None or m.target != "feature" or m.film != film or m.film_year:
+                    return
+                matches = [_copy.deepcopy(x) for x in job.matches]
+            for x in matches:
+                if x.title_index == ti:
+                    x.film_year = year
+            self.set_matches(job, matches)
+            if self.job is job:
+                self.fill_table()
+
+        self.win.run_task(f"film_year:{job.id}:{ti}", lambda _p: self.win.ctl.film_year(film), ok=found, quiet=True)
 
     def set_matches(self, job: Job, matches: list[Match]):
         """Hand new matches to the controller, which keeps the ones a copy has already locked."""
@@ -3275,7 +3345,8 @@ class MatchPage(QWidget):
         self.show_combo.blockSignals(False)
         if not hits:
             self.win.error("No show found", f"TVmaze has no show called “{text}”.",
-                           "Check the spelling, or try the show's original title.")
+                           "Check the spelling, or try the show's original title. If it's a film or a TV "
+                           "special, choose your films folder in Copy to instead.")
             return
         if auto:
             want = (self.job.show or "").lower()
@@ -4010,6 +4081,8 @@ class MatchPage(QWidget):
             text = "It's skipped, so it isn't copied."
         elif m.target == "extra":
             text = f"It's saved as an extra, “{m.extra_name}”, in {m.extra_folder}."
+        elif m.target == "feature" and m.film:
+            text = f"It's the film “{m.film}”" + (f" ({m.film_year})." if m.film_year else ".")
         elif m.target == "feature":
             text = "It's the film."
         elif m.episode is None:

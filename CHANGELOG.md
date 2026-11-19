@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- A disc can hold more than one film, such as a holiday disc with two TV specials. On the
+  Match page of a disc going to films, "Another film…" names a title as a film of its own,
+  and it gets its own folder in storage. Its year is looked up on TheDiscDB when it's left
+  empty. Before, every film title on a disc took the disc's name, so the second special
+  could only be saved as an extra.
+- On a disc going to films, a title as long as an episode is flagged for checking instead of
+  being saved quietly as an extra, because it may be another special on the disc.
+- When no TV show matches a disc's name, the message suggests choosing the films folder, for
+  a disc named after a film or a TV special such as "It's the Great Pumpkin, Charlie Brown".
 - A film that comes on two discs keeps its part in its name. The title guessed from the disc
   name used to drop everything after " - " and any "Part 2", which suits a TV volume
   ("Show - Season 1") but gave both "Harry Potter and the Deathly Hallows - Part 1" and

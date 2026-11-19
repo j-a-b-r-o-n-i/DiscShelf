@@ -258,6 +258,11 @@ def feature_match(titles: list[Title]) -> list[Match]:
             out.append(Match(title_index=t.index, target="extra", extra_name=extra_name(t), confidence="check",
                              note="A second feature-length title is selected, so it is saved as an extra; "
                                   "rename it if it is another cut of the film."))
+        elif t.selected and t.kind == "episode":
+            # A disc of TV specials, such as a holiday disc, holds more than one short film.
+            out.append(Match(title_index=t.index, target="extra", extra_name=extra_name(t), confidence="check",
+                             note="It's as long as an episode, so it may be another special or film on this "
+                                  "disc. If it is, choose Another film… and type its name."))
         elif t.selected:
             out.append(Match(title_index=t.index, target="extra", extra_name=extra_name(t), confidence="close"))
         else:

@@ -432,7 +432,7 @@ def _title_label(ti: int, m: Match | None) -> str:
         name = f" “{m.episode.title}”" if m.episode.title else ""
         return _ep_code(m.episode) + name
     if m is not None and m.target == "feature":
-        return "The film"
+        return f"The film “{m.film}”" if m.film else "The film"
     if m is not None and m.target == "extra" and m.extra_name:
         return f"The extra “{m.extra_name}”"
     return f"Title {ti}"
@@ -459,9 +459,7 @@ def _hours_since(iso: str) -> float | None:
     return (now - t).total_seconds() / 3600
 
 
-def _film_key(title: str) -> str:
-    """A film title compared without case, punctuation or spacing: "Film: Part 1" is "Film - Part 1"."""
-    return re.sub(r"[^0-9a-z]+", "", (title or "").casefold())
+_film_key = naming.film_key
 
 
 def _label_stem(label: str) -> str:
@@ -1945,21 +1943,28 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         hit = self._discdb_hits.get(job.id)
         year = hit.year if hit and hit.year and hit.media_type.lower() == "movie" else None
         if year is None:
-            try:
-                nodes = self.discdb.search(job.show)
-            except discdb.DiscDbError:
-                return None
-            want = _film_key(job.show)
-            years = {int(n["year"]) for n in nodes
-                     if (n.get("type") or "").lower() == "movie" and str(n.get("year") or "").isdigit()
-                     and _film_key(n.get("title") or "") == want}
-            year = years.pop() if len(years) == 1 else None
+            year = self.film_year(job.show)
         if year:
             with self.job_lock:
                 if not job.year:
                     job.year = year
                     self._save(job)
         return job.year
+
+    def film_year(self, title: str) -> int | None:
+        """The year of the one film TheDiscDB has under this title (punctuation aside), or None
+        when it has none, several, or can't be reached. Names a second film on a disc."""
+        if not title.strip():
+            return None
+        try:
+            nodes = self.discdb.search(title)
+        except discdb.DiscDbError:
+            return None
+        want = _film_key(title)
+        years = {int(n["year"]) for n in nodes
+                 if (n.get("type") or "").lower() == "movie" and str(n.get("year") or "").isdigit()
+                 and _film_key(n.get("title") or "") == want}
+        return years.pop() if len(years) == 1 else None
 
     def _discdb_matches(self, job: Job, titles: list[Title], episodes: list) -> list[Match] | None:
         """Matches from TheDiscDB when it has this exact disc, else None. Looked up once per job;
