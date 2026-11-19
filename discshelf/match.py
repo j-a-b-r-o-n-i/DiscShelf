@@ -6,6 +6,7 @@ the match is marked "check" with a sentence saying why, and the user decides.
 from __future__ import annotations
 
 import difflib
+import itertools
 import os
 import re
 
@@ -155,6 +156,56 @@ def parse_episode_list(text: str) -> list[str]:
         name = re.sub(r"^\s*\d{1,3}\s*[.):\-]?\s+", "", line).strip()
         if name:
             out.append(name)
+    return out
+
+
+# What a case prints before a name in its list of contents: "Bonus Episode:", "Plus Featurette:".
+_LIST_LABEL = re.compile(r"^(?:(?:plus|bonus)\s+)*(?:episode|feature|featurette|special|film|movie|short|bonus)s?\s*:\s*",
+                         re.IGNORECASE)
+
+
+def parse_film_list(text: str) -> list[str]:
+    """Film and special names typed off the case, one per line, as parse_episode_list reads
+    them, without a label the case prints before a name ("Bonus Episode: It's Magic")."""
+    return [n for n in (_LIST_LABEL.sub("", line).strip() for line in parse_episode_list(text)) if n]
+
+
+def match_films(titles: list[Title], names: list[str], lengths: dict[str, list[int]]) -> list[tuple[int, str, str]]:
+    """(title index, film name, note) for each title a name from the case goes to.
+
+    A case lists a disc's films and specials, but not always in disc order, so each name goes
+    to the title whose running time is closest to one TheDiscDB has for it (lengths, in
+    seconds, from any release). A name TheDiscDB doesn't know follows disc order. The note
+    says when the closest running time is still far off; it is "" otherwise."""
+    titles = sorted(titles, key=lambda t: t.index)
+    k = min(len(titles), len(names))
+    if not k:
+        return []
+
+    def off(t: Title, name: str) -> int | None:
+        known = lengths.get(name) or []
+        return min(abs(t.duration_s - s) for s in known) if known else None
+
+    def cost(pairs) -> float:
+        # Seconds off, then distance from disc order, which alone decides when no length is known.
+        return sum((off(titles[ti], names[ni]) or 0) + 0.001 * abs(ti - ni) for ti, ni in pairs)
+
+    if max(len(titles), len(names)) <= 8:
+        if len(names) <= len(titles):
+            options = ([(ti, ni) for ni, ti in enumerate(p)] for p in itertools.permutations(range(len(titles)), k))
+        else:
+            options = ([(ti, ni) for ti, ni in enumerate(p)] for p in itertools.permutations(range(len(names)), k))
+        best = min(options, key=cost)
+    else:
+        best = [(i, i) for i in range(k)]
+    out = []
+    for ti, ni in sorted(best):
+        t, name = titles[ti], names[ni]
+        d = off(t, name)
+        note = "" if d is None or d <= 30 else (
+            f"The case lists it, but it runs {_mins(t)} min and TheDiscDB has “{name}” at "
+            f"{round(min(lengths[name], key=lambda s: abs(t.duration_s - s)) / 60)} min.")
+        out.append((t.index, name, note))
     return out
 
 

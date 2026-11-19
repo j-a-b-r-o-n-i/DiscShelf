@@ -2,7 +2,9 @@
 """
 Tests for a disc that holds more than one film, such as a holiday disc with two TV specials:
 a title matched to another film is named from its match and gets its own folder, the disc's
-extras stay with its first film, a job saved before the film fields existed still loads, and a
+extras stay with its first film, the names typed off the case go to the titles their running
+times on TheDiscDB fit, title cards name the specials with no typing when the running times
+agree, a job saved before the film fields existed still loads, and a
 second film's year is looked up on TheDiscDB by its title.
 
 Run:  python3 discshelf/test_specials.py    (also works under pytest)
@@ -18,8 +20,16 @@ from discshelf.config import Config, Destination  # noqa: E402
 from discshelf.jobs import JobStore  # noqa: E402
 from discshelf.models import Job, Match, Title, job_from_dict, to_dict  # noqa: E402
 
+# The box set TheDiscDB has: not this disc, but it gives each special's running time.
+BOX = [{"title": "Ultimate Collection", "discs": [{"index": 1, "name": "D1", "format": "Blu-ray", "titles": [
+    {"index": 0, "sourceFile": "00003.mpls", "duration": "0:25:18", "size": 1, "itemType": "MainMovie",
+     "item": {"title": "It's the Great Pumpkin, Charlie Brown", "type": "MainMovie"}},
+    {"index": 1, "sourceFile": "00004.mpls", "duration": "0:24:24", "size": 1, "itemType": "MainMovie",
+     "item": {"title": "It's Magic, Charlie Brown", "type": "MainMovie"}},
+]}]}]
 DISCDB = json.dumps({"data": {"mediaItems": {"nodes": [
-    {"title": "It's the Great Pumpkin, Charlie Brown", "year": 1966, "type": "Movie", "releases": []},
+    {"title": "It's the Great Pumpkin, Charlie Brown", "year": 1966, "type": "Movie", "releases": BOX},
+    {"title": "It's Magic, Charlie Brown", "year": 1981, "type": "Movie", "releases": BOX},
     {"title": "You're Not Elected, Charlie Brown", "year": 1972, "type": "Movie", "releases": []},
     {"title": "Peanuts", "year": 2014, "type": "Series", "releases": []},
 ]}}}).encode()
@@ -67,6 +77,54 @@ def test_specials():
         job.matches[1].film_year = None
         assert dict(ctl.preview_paths(job))[2] == \
             "You're Not Elected, Charlie Brown/You're Not Elected, Charlie Brown.mkv"
+
+        # The list from the case, bonus special first: each special still goes to its own title.
+        job = holiday_job(nas)
+        job.matches = [Match(0, "feature", confidence="check"), Match(2, "extra", extra_name="Title 02"),
+                       Match(4, "extra", extra_name="Making Of", confidence="manual")]
+        ctl.match_films_from_list(job, "Bonus Episode: It's Magic, Charlie Brown\n"
+                                       "It's the Great Pumpkin, Charlie Brown")
+        got = [(m.title_index, m.target, m.film, m.film_year, m.confidence, m.source) for m in job.matches]
+        assert got == [(0, "feature", "", None, "close", "list"),
+                       (2, "feature", "It's Magic, Charlie Brown", 1981, "close", "list"),
+                       (4, "extra", "", None, "manual", "")], got
+        assert dict(ctl.preview_paths(job))[2] == "It's Magic, Charlie Brown (1981)/It's Magic, Charlie Brown (1981).mkv"
+
+        # Title cards name the specials. "Charlie Brown" is on both cards and in many specials'
+        # names, so a reading counts because each title runs as long as TheDiscDB's record of it.
+        from discshelf.titlecard import CardLine, TitleReading
+        ctl.cfg.read_title_cards = True
+        job = holiday_job(nas)
+        job.matches = [Match(0, "feature", confidence="check"), Match(2, "extra", extra_name="Title 02", confidence="check"),
+                       Match(4, "extra", extra_name="Making Of", confidence="manual")]
+        assert ctl.cards_possible(job)
+        assert sorted(ctl.film_choices(job)) == ["It's Magic, Charlie Brown", "It's the Great Pumpkin, Charlie Brown"]
+
+        def card(*texts):
+            return TitleReading(frame_h=480, frames=30, lines=[CardLine(tx, 0.9, 135.0, 200, 100 + 40 * i, 400, 36)
+                                                               for i, tx in enumerate(texts)])
+
+        ctl._cards[job.id] = {0: card("IT'S", "THE GREAT", "PUMPKIN", "CHARLIE RROWN"),
+                              2: card("IT'S MAGIC", "CHARLIE BROWN")}
+        assert ctl.apply_cards(job) == 2
+        got = [(m.title_index, m.target, m.film, m.film_year, m.source) for m in job.matches]
+        assert got == [(0, "feature", "", None, "card"), (2, "feature", "It's Magic, Charlie Brown", 1981, "card"),
+                       (4, "extra", "", None, "")], got
+
+        # A title whose running time doesn't fit the film its card names is flagged for a check.
+        job = holiday_job(nas)
+        job.titles[1].duration_s = 1800
+        job.matches = [Match(0, "feature", confidence="check"), Match(2, "extra", extra_name="Title 02", confidence="check")]
+        ctl._cards[job.id] = {0: card("IT'S", "THE GREAT", "PUMPKIN", "CHARLIE RROWN"),
+                              2: card("IT'S MAGIC", "CHARLIE BROWN")}
+        ctl.apply_cards(job)
+        m = job.matches[1]
+        assert (m.target, m.confidence) == ("feature", "check") and "30 min" in m.note, m
+
+        # A disc with one film has no cards to read.
+        one = holiday_job(nas)
+        one.titles[1].kind = "feature"
+        assert not ctl.cards_possible(one)
 
     # The film fields survive a save, and a job saved before they existed loads with none.
     back = job_from_dict(json.loads(json.dumps(to_dict(holiday_job("/x")))))

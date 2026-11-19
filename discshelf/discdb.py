@@ -22,6 +22,7 @@ from typing import Any, Callable
 
 from .match import _non_episode, extra_name, score_name
 from .models import Disc, Episode, Match, Title
+from .naming import film_key
 
 URL = "https://thediscdb.com/graphql/"
 Fetch = Callable[[str, bytes], bytes]      # (url, request body) -> reply body
@@ -154,6 +155,51 @@ def _seconds(s: Any) -> int:
     for part in str(s or "").strip().split(":"):
         total = total * 60 + (int(part) if part.isdigit() else 0)
     return total
+
+
+def film_lengths(nodes: list[dict], name: str) -> list[int]:
+    """Running times in seconds TheDiscDB has for the film or special called name, from every
+    release in a search's nodes (punctuation and case aside). A disc of specials can be told
+    apart by these even when TheDiscDB doesn't have that disc."""
+    want = film_key(name)
+    out = set()
+    for n in nodes or []:
+        for r in n.get("releases") or []:
+            for d in r.get("discs") or []:
+                for t in d.get("titles") or []:
+                    item = t.get("item") or {}
+                    kind = (t.get("itemType") or item.get("type") or "").lower()
+                    if kind == "mainmovie" and want and film_key(item.get("title") or "") == want:
+                        out.add(_seconds(t.get("duration")))
+    return sorted(s for s in out if s)
+
+
+def sibling_films(nodes: list[dict], name: str) -> dict[str, list[int]]:
+    """The films on TheDiscDB's releases that hold the film called name, with each one's running
+    times in seconds: the other specials a holiday disc may hold. When no release holds it, the
+    films the search found. name itself is always there, with no length when none is known."""
+    def films(releases) -> dict[str, set[int]]:
+        out: dict[str, set[int]] = {}
+        for r in releases:
+            for d in r.get("discs") or []:
+                for t in d.get("titles") or []:
+                    item = t.get("item") or {}
+                    if (t.get("itemType") or item.get("type") or "").lower() == "mainmovie" and item.get("title"):
+                        out.setdefault(item["title"], set()).add(_seconds(t.get("duration")))
+        return out
+
+    want = film_key(name)
+    releases = [r for n in nodes or [] for r in n.get("releases") or []]
+    holding = [r for r in releases if any(film_key(f) == want for f in films([r]))]
+    found = films(holding)
+    if not holding:
+        everything = films(releases)
+        for n in nodes or []:
+            if (n.get("type") or "").lower() == "movie" and n.get("title"):
+                found.setdefault(n["title"], set()).update(everything.get(n["title"], set()))
+    if not any(film_key(f) == want for f in found):
+        found[name] = set()
+    return {f: sorted(x for x in lengths if x) for f, lengths in found.items()}
 
 
 def _int(v: Any) -> int | None:

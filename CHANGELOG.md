@@ -7,10 +7,25 @@
   and it gets its own folder in storage. Its year is looked up on TheDiscDB when it's left
   empty. Before, every film title on a disc took the disc's name, so the second special
   could only be saved as an extra.
+- A disc of TV specials going to films is named from its title cards, with no typing. Its
+  titles' cards are read during the rip, or when its Match page first opens if it was ripped
+  already, and compared with the films TheDiscDB lists on releases that hold the disc's film.
+  A reading counts when the title runs within 30 seconds of TheDiscDB's length for that film,
+  since many specials share words ("…, Charlie Brown"). On "It's the Great Pumpkin, Charlie
+  Brown" this names the bonus special "It's Magic, Charlie Brown" in about half a minute.
+- A film disc's Match page has "Enter film list…" to name its films and specials from the
+  case, such as "It's the Great Pumpkin, Charlie Brown" and its bonus special "It's Magic,
+  Charlie Brown". Labels such as "Bonus Episode:" can be typed too. Each name goes to the
+  title whose running time is closest to one TheDiscDB has for it on any release, so the
+  order on the case doesn't matter; a name TheDiscDB doesn't know follows disc order.
 - On a disc going to films, a title as long as an episode is flagged for checking instead of
   being saved quietly as an extra, because it may be another special on the disc.
-- When no TV show matches a disc's name, the message suggests choosing the films folder, for
-  a disc named after a film or a TV special such as "It's the Great Pumpkin, Charlie Brown".
+- A disc going to TV shows whose name is a film on TheDiscDB but no show on TVmaze, such as a
+  TV special ("It's the Great Pumpkin, Charlie Brown"), moves to the films folder by itself,
+  with the film's year, and the Match page says so. Before, it stopped at "No show found".
+  When neither knows the name, the message now suggests choosing the films folder.
+- Opening another disc on the Match page clears the last disc's show search, so the
+  automatic search no longer reports the last disc's show as not found.
 - A film that comes on two discs keeps its part in its name. The title guessed from the disc
   name used to drop everything after " - " and any "Part 2", which suits a TV volume
   ("Show - Season 1") but gave both "Harry Potter and the Deathly Hallows - Part 1" and

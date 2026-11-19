@@ -52,6 +52,7 @@ Progress = Callable[[float, str], None]
 SCAN_MIN_SECONDS = 120     # shorter titles are menus and logos; scan and rip must agree on this
 BLURAY_1X = 4.5e6          # bytes per second at 1× Blu-ray speed
 RIP_WINDOW = 20.0          # seconds the rip speed is averaged over; MakeMKV writes in 32 MB blocks
+FILM_FIT_S = 30             # a title read as a film counts when it runs this close to TheDiscDB's length for it
 RIP_SHARE = 0.9            # of the overall progress bar; the rest is what is left to do after the rip
 RIP_STOPPED = "Rip stopped."    # how a stopped rip's status starts; recover_titles leaves those alone
 LOCKED_STATES = ("copying", "checking", "verified")      # the match can no longer change
@@ -910,6 +911,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         self.tvmaze = tvmaze or TvMaze()
         self.discdb = discdb_client or discdb.TheDiscDb()
         self._discdb_hits: dict[str, discdb.DiscHit | None] = {}    # job id → TheDiscDB's record of the disc
+        self._film_choices: dict[tuple[str, str], dict[str, list[int]]] = {}   # (job id, film) → sibling_films
         self._cards: dict[str, dict[int, titlecard.TitleReading]] = {}   # job id → title cards read so far
         self._card_state: dict[str, dict[int, CardStatus]] = {}          # job id → each title's card status
         self._scans: dict[int, tuple[dict, Disc]] = {}
@@ -1583,8 +1585,30 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
 
     # --- title cards ---------------------------------------------------------
 
-    def _cards_wanted(self, job: Job) -> bool:
-        return self.cfg.read_title_cards and self._layout(job) != "movie" and bool(ocr.engine())
+    def cards_wanted(self, job: Job) -> bool:
+        """Whether this disc's title cards are read without being asked (Settings, and OCR installed)."""
+        return self.cfg.read_title_cards and self.cards_possible(job) and bool(ocr.engine())
+
+    _cards_wanted = cards_wanted
+
+    def cards_possible(self, job: Job) -> bool:
+        """Whether title cards can name this disc's titles: a TV disc's episodes, or a film disc
+        that holds several episode-length titles, such as a holiday disc of TV specials."""
+        if self._layout(job) != "movie":
+            return True
+        return sum(1 for t in job.titles if t.selected and t.kind == "episode") >= 2
+
+    def film_choices(self, job: Job) -> dict[str, list[int]]:
+        """The films a film disc's titles may be, with their running times in seconds, from
+        TheDiscDB's releases that hold the disc's film. Offline, only the disc's film."""
+        key = (job.id, job.show)
+        if key not in self._film_choices:
+            try:
+                nodes = self.discdb.search(job.show) if job.show.strip() else []
+            except discdb.DiscDbError:
+                return {job.show: []} if job.show.strip() else {}
+            self._film_choices[key] = discdb.sibling_films(nodes, job.show) if job.show.strip() else {}
+        return self._film_choices[key]
 
     def _card_queue(self, run: "_Run", ti: int, path: str) -> None:
         if not self._cards_wanted(run.job):
@@ -1621,7 +1645,12 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         return theme.ThemeBook(str(key)) if key not in (None, "") else None
 
     def _card_episodes(self, job: Job) -> list[Episode]:
-        """The show's episodes, for the card reader to stop at; [] reads each title to the limit."""
+        """The show's episodes, for the card reader to stop at; [] reads each title to the limit.
+        On a film disc, the films it may hold stand in for episodes."""
+        if self._layout(job) == "movie":
+            return [Episode(season=0, number=i + 1, title=name,
+                            runtime_min=round(max(lengths) / 60) if lengths else None)
+                    for i, (name, lengths) in enumerate(sorted(self.film_choices(job).items()))]
         if job.show_id is None:
             return []
         try:
@@ -1634,7 +1663,8 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         with self.job_lock:
             st = self._card_state.setdefault(job.id, {}).setdefault(ti, CardStatus())
             st.state, st.started, st.note = "reading", time.monotonic(), ""
-        themes = self._themes(job)
+        # Each special on a film disc has its own opening, so there's no theme song to learn.
+        themes = self._themes(job) if self._layout(job) != "movie" else None
         try:
             reading = titlecard.scan_title(path, self._card_episodes(job),
                                            limit_s=max(1, self.cfg.card_search_minutes) * 60, themes=themes,
@@ -1759,7 +1789,9 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         with self.job_lock:
             readings = dict(self._cards.get(job.id, {}))
             show_id = job.show_id
-        if not readings or show_id is None or self._layout(job) == "movie":
+        if readings and self._layout(job) == "movie":
+            return self._apply_film_cards(job, readings)
+        if not readings or show_id is None:
             return 0
         episodes = self.tvmaze.episodes(show_id, None)
         picks = titlecard.pick_episodes(readings, episodes)
@@ -1791,6 +1823,54 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                     out.append(m)
                     n += 1
             out.sort(key=lambda m: m.title_index)
+        self.update_matches(job, out)
+        return n
+
+    def _apply_film_cards(self, job: Job, readings: dict[int, titlecard.TitleReading]) -> int:
+        """Name a film disc's titles from their cards. Many specials share words ("…, Charlie
+        Brown"), so a reading counts when the card reader is sure, or when the title runs within
+        FILM_FIT_S of a length TheDiscDB has for that film. Like apply_cards, it replaces only a
+        guess or an earlier card reading."""
+        choices = self.film_choices(job)
+        picks = titlecard.pick_episodes(readings, self._card_episodes(job))
+        dur = {t.index: t.duration_s for t in job.titles}
+        named: dict[int, str] = {}
+        notes: dict[int, str] = {}       # a sure reading whose running time is far from TheDiscDB's
+        for ti, cm in picks.items():
+            if cm.episode is None:
+                continue
+            lengths = choices.get(cm.episode.title) or []
+            fits = any(abs(dur.get(ti, 0) - s) <= FILM_FIT_S for s in lengths)
+            if cm.sure or fits:
+                named[ti] = cm.episode.title
+            if cm.sure and lengths and not fits:
+                near = min(lengths, key=lambda s: abs(dur.get(ti, 0) - s))
+                notes[ti] = (f"Its title card reads “{cm.text}”, but it runs {round(dur.get(ti, 0) / 60)} min "
+                             f"and TheDiscDB has “{cm.episode.title}” at {round(near / 60)} min.")
+        years = {name: self.film_year(name) for name in set(named.values())
+                 if naming.film_key(name) != naming.film_key(job.show)}
+        with self.job_lock:
+            for ti, cm in picks.items():
+                st = self._card_state.setdefault(job.id, {}).setdefault(ti, CardStatus(state="read"))
+                if st.state in ("read", "none"):
+                    st.text, st.sure = cm.text, ti in named and ti not in notes
+                    st.t = cm.t if cm.episode is not None else None
+                    st.state = "read" if cm.episode is not None else "none"
+            locked = self._locked(job)
+            out, n = [], 0
+            for cur in job.matches:
+                name = named.get(cur.title_index)
+                if (name is None or cur.title_index in locked or cur.confirmed
+                        or cur.source not in ("", "runtime", "card") or cur.target == "skip"):
+                    out.append(cur)
+                    n += cur.source == "card"
+                    continue
+                own = naming.film_key(name) == naming.film_key(job.show)
+                note = notes.get(cur.title_index, "")
+                out.append(Match(title_index=cur.title_index, target="feature", confidence="check" if note else "close",
+                                 note=note, source="card", film="" if own else name,
+                                 film_year=None if own else years.get(name)))
+                n += 1
         self.update_matches(job, out)
         return n
 
@@ -1905,6 +1985,10 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         if self._layout(job) == "movie":
             matches = self._discdb_matches(job, titles, []) or match.feature_match(titles)
             self.fill_film_year(job)
+            self.update_matches(job, matches)
+            # Title cards read so far, on a disc of specials, name the titles a running time can't.
+            self.apply_cards(job)
+            return job.matches
         else:
             if show_id is None:
                 raise ValueError("Pick the show from the search results first.")
@@ -1994,6 +2078,31 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         for m in matches:
             m.source = "list"
         return self.update_matches(job, matches)
+
+    def match_films_from_list(self, job: Job, text: str) -> list[Match]:
+        """Name a film disc's films from the list on its case, such as a holiday disc's special
+        and its bonus special. Each name goes to the title whose running time is closest to one
+        TheDiscDB has for it on any release, else in disc order. The disc's film keeps the
+        disc's name; every other one becomes a film of its own, with its year from TheDiscDB."""
+        names = match.parse_film_list(text)
+        if not names:
+            raise ValueError("Type the names of the films and specials from the case, one per line.")
+        with self.job_lock:
+            chosen = {tp.title_index for tp in job.titles_progress} or {f.title_index for f in job.files}
+            by = {m.title_index: _copy.deepcopy(m) for m in job.matches}
+            titles = [t for t in job.titles if (t.index in chosen if chosen else t.selected)
+                      and (t.kind in ("feature", "episode") or getattr(by.get(t.index), "target", "") == "feature")]
+        lengths = {}
+        for n in names:
+            try:
+                lengths[n] = discdb.film_lengths(self.discdb.search(n), n)
+            except discdb.DiscDbError:
+                lengths[n] = []
+        for ti, name, note in match.match_films(titles, names, lengths):
+            own = naming.film_key(name) == naming.film_key(job.show)
+            by[ti] = Match(title_index=ti, target="feature", confidence="check" if note else "close", note=note,
+                           source="list", film="" if own else name, film_year=None if own else self.film_year(name))
+        return self.update_matches(job, [by[k] for k in sorted(by)])
 
     def episode_list_from_photo(self, path: str, show_id: int) -> "caseocr.CaseList":
         """The episode names printed on a photo of the case, in disc order, for the user to check."""

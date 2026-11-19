@@ -2473,22 +2473,30 @@ class FilmDialog(QDialog):
 class EpisodeListDialog(QDialog):
     IMAGES = (".jpg", ".jpeg", ".png", ".webp", ".heic", ".bmp", ".tif", ".tiff")
 
-    def __init__(self, parent, text: str, read_photo=None):
-        """read_photo(path) runs on a worker and returns a caseocr.CaseList; None hides the photo button."""
+    def __init__(self, parent, text: str, read_photo=None, film: bool = False):
+        """read_photo(path) runs on a worker and returns a caseocr.CaseList; None hides the photo button.
+        film asks for the films and specials of a film disc instead of episodes."""
         super().__init__(parent)
-        self.setWindowTitle("Enter the episode list")
+        self.setWindowTitle("Enter the film list" if film else "Enter the episode list")
         self.read_photo = read_photo
         self.text = QPlainTextEdit(text)
-        self.text.setPlaceholderText("1. First episode on the case\n2. Second episode\n3. …")
-        hint = label("Type or paste the episode names from the case, one per line, in the order the case lists them. "
-                     "They're matched to the titles in disc order and can come from any season.", "muted", wrap=True)
+        if film:
+            self.text.setPlaceholderText("It's the Great Pumpkin, Charlie Brown\nIt's Magic, Charlie Brown")
+            hint = label("Type or paste the names of the films and specials on the case, one per line. "
+                         "Each one is matched to a title by its running time on TheDiscDB, or else in disc order. "
+                         "Leave out featurettes.", "muted", wrap=True)
+        else:
+            self.text.setPlaceholderText("1. First episode on the case\n2. Second episode\n3. …")
+            hint = label("Type or paste the episode names from the case, one per line, in the order the case lists "
+                         "them. They're matched to the titles in disc order and can come from any season.",
+                         "muted", wrap=True)
         self.photo_btn = button("Read a photo of the case…")
         self.photo_btn.clicked.connect(self.choose_photo)
         self.photo_btn.setVisible(read_photo is not None)
         self.photo_note = label("", "muted", wrap=True)
         self.photo_note.hide()
         buttons = QDialogButtonBox()
-        self.ok = buttons.addButton("Match episodes", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.ok = buttons.addButton("Match films" if film else "Match episodes", QDialogButtonBox.ButtonRole.AcceptRole)
         self.ok.setProperty("primary", "true")
         buttons.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
         buttons.accepted.connect(self.accept)
@@ -2825,6 +2833,11 @@ class MatchPage(QWidget):
             self.stack.setCurrentIndex(0)
             return
         self.stack.setCurrentIndex(1)
+        if not same:
+            # The last disc's search results would otherwise stay in the box, and its name with them.
+            self.show_combo.blockSignals(True)
+            self.show_combo.clear()
+            self.show_combo.blockSignals(False)
         self.fill_dest()
         self.fill_fields()
         if not same:
@@ -2842,7 +2855,8 @@ class MatchPage(QWidget):
         elif job.show and job.id not in self.show_ids:
             q = job.show
             self.win.run_task("search", lambda _p: self.win.ctl.search_show(q),
-                              ok=lambda hits: self.got_hits(hits, auto=True), title="Couldn't search for the show",
+                              ok=lambda hits: self.got_hits(hits, auto=True, query=q),
+                              title="Couldn't search for the show",
                               next_step="Check the internet connection, then choose Find show again.")
 
     def fill_dest(self):
@@ -2954,7 +2968,7 @@ class MatchPage(QWidget):
         show_progress = bool(prog) or self.win.is_ripping(job)
         t.setColumnHidden(5, not show_progress)
         cards = self.card_status()
-        t.setColumnHidden(6, film or not cards)
+        t.setColumnHidden(6, not cards)
         self.card_cells = {}
         notes = []
         for m in rows:
@@ -3211,12 +3225,16 @@ class MatchPage(QWidget):
                                    if held else "")
         self.find_btn.setEnabled(not self.win.busy("search"))
         self.find_btn.setText("Searching…" if self.win.busy("search") else "Find show")
-        self.list_btn.setVisible(self.layout() != "movie")
-        self.list_btn.setEnabled(job.id in self.show_ids and not self.win.busy("suggest"))
+        film = self.layout() == "movie"
+        self.list_btn.setText("Enter film list…" if film else "Enter episode list…")
+        self.list_btn.setToolTip("Name the films and specials on this disc from the list on the case." if film else
+                                 "Match the titles to the episode names printed on the case, from any season.")
+        self.list_btn.setEnabled((film or job.id in self.show_ids) and not self.win.busy("suggest"))
         # During a rip the cards are read as each title finishes; this is for discs already ripped.
-        self.cards_btn.setVisible(self.layout() != "movie" and job.stage != "rip" and bool(job.files)
+        self.cards_btn.setVisible((not film or self.cards_possible()) and job.stage != "rip" and bool(job.files)
                                   and hasattr(self.win.ctl, "read_cards"))
-        self.cards_btn.setEnabled(job.id in self.show_ids and not self.win.busy("cards") and not self.win.busy("suggest"))
+        self.cards_btn.setEnabled((film or job.id in self.show_ids) and not self.win.busy("cards")
+                                  and not self.win.busy("suggest"))
         self.cards_btn.setText("Reading title cards…" if self.win.busy("cards") else "Read title cards")
 
     def titles_left(self) -> list[RippedFile] | None:
@@ -3331,10 +3349,10 @@ class MatchPage(QWidget):
                           title="Couldn't search for the show",
                           next_step="Check the internet connection, then choose Find show again.")
 
-    def got_hits(self, hits, auto: bool = False):
+    def got_hits(self, hits, auto: bool = False, query: str = ""):
         if self.job is None:
             return
-        text = self.show_combo.currentText()
+        text = query or self.show_combo.currentText()
         self.show_combo.blockSignals(True)
         self.show_combo.clear()
         for h in hits:
@@ -3344,9 +3362,7 @@ class MatchPage(QWidget):
         self.show_combo.setEditText(text)
         self.show_combo.blockSignals(False)
         if not hits:
-            self.win.error("No show found", f"TVmaze has no show called “{text}”.",
-                           "Check the spelling, or try the show's original title. If it's a film or a TV "
-                           "special, choose your films folder in Copy to instead.")
+            self.try_as_film(text)
             return
         if auto:
             want = (self.job.show or "").lower()
@@ -3357,6 +3373,43 @@ class MatchPage(QWidget):
             self.choose(hits[0])
         else:
             self.show_combo.showPopup()
+
+    def try_as_film(self, text: str):
+        """No TV show has the disc's name. When TheDiscDB has a film by that name, such as a TV
+        special ("It's the Great Pumpkin, Charlie Brown"), the disc goes to the films folder instead."""
+        job = self.job
+        name = re.sub(r"\s*\((19|20)\d\d\)\s*$", "", text).strip()
+        films = next((d for d in self.win.cfg.destinations if d.layout == "movie"), None)
+
+        def not_found():
+            self.win.error("No show found", f"TVmaze has no show called “{text}”.",
+                           "Check the spelling, or try the show's original title. If it's a film or a TV "
+                           "special, choose your films folder in Copy to instead.")
+
+        def found(year):
+            if self.job is not job:
+                return
+            if not year or films is None or self.layout() == "movie":
+                not_found()
+                return
+            job.destination, job.media_kind, job.library = films.path, films.kind, films.library
+            job.year = year
+            if naming.film_key(name) != naming.film_key(job.show):
+                job.show = name
+            job.matches = []
+            self.fill_dest()
+            self.fill_fields()
+            self.refresh_suggestions()
+            self.set_saved(f"TheDiscDB lists “{name}” ({year}) as a film, so this disc now goes to "
+                           f"{films.label}. Choose another folder in Copy to if that's wrong.")
+
+        if not name or films is None:
+            not_found()
+            return
+        # Its own key: this starts while the show search's task is still finishing.
+        self.win.run_task("film_check", lambda _p: self.win.ctl.film_year(name), ok=found,
+                          title="Couldn't search for the show",
+                          next_step="Check the internet connection, then choose Find show again.")
 
     def hit_chosen(self, i: int):
         h = self.show_combo.itemData(i)
@@ -3430,12 +3483,25 @@ class MatchPage(QWidget):
                     self.year.blockSignals(False)
                 self.fill_table()
                 self.refresh_season()
+                self.auto_film_cards()
 
         self.win.run_task("suggest", lambda _p: self.win.ctl.suggest_matches(job, sid), ok=done,
                           title="Couldn't match the titles",
                           next_step="Check the show and season, then pick the episodes by hand if it happens again.")
         self.load_episodes()
         self.fill_table()
+
+    def auto_film_cards(self):
+        """A ripped disc of TV specials going to films: read its title cards once, as a TV disc's
+        are read during the rip, so each special is named without typing."""
+        job = self.job
+        wanted = getattr(self.win.ctl, "cards_wanted", None)
+        if (job is None or self.layout() != "movie" or job.stage == "rip" or not job.files
+                or self.card_status() or not (wanted and wanted(job)) or self.win.busy("cards")):
+            return
+        if any(m.source in ("card", "list", "manual", "discdb") or m.confirmed for m in job.matches):
+            return
+        self.read_cards()
 
     def load_episodes(self):
         job = self.job
@@ -3455,6 +3521,9 @@ class MatchPage(QWidget):
 
     def enter_list(self):
         job = self.job
+        if job is not None and self.layout() == "movie":
+            self.enter_film_list()
+            return
         sid = self.show_ids.get(job.id) if job else None
         if sid is None:
             return
@@ -3476,18 +3545,43 @@ class MatchPage(QWidget):
                           next_step="Check the names against the case, or pick the episodes by hand.")
         self.fill_table()
 
+    def enter_film_list(self):
+        job = self.job
+        dlg = EpisodeListDialog(self, self.list_text.get(job.id, ""), None, film=True)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        text = self.list_text[job.id] = dlg.text.toPlainText()
+
+        def done(matches):
+            self.set_matches(job, list(matches))
+            if self.job is job:
+                self.fill_table()
+
+        self.win.run_task("suggest", lambda _p: self.win.ctl.match_films_from_list(job, text), ok=done,
+                          title="Couldn't match the film list",
+                          next_step="Check the names against the case, or choose Another film… for each title.")
+        self.fill_table()
+
+    def cards_possible(self) -> bool:
+        """A film disc of TV specials can be named from its title cards; any other film disc can't."""
+        get = getattr(self.win.ctl, "cards_possible", None)
+        return bool(self.job and get and get(self.job))
+
     def read_cards(self, only: set[int] | None = None):
         job = self.job
-        if job is None or job.id not in self.show_ids:
+        film = self.layout() == "movie"
+        if job is None or (job.id not in self.show_ids and not film) or (film and not self.cards_possible()):
             return
-        job.show_id = self.show_ids[job.id]
+        if not film:
+            job.show_id = self.show_ids[job.id]
 
         def done(n):
             if only is not None:
                 self.set_season_note("")
             else:
                 self.set_saved(f"Matched {plural(n, 'title')} from {'its' if n == 1 else 'their'} title cards."
-                               if n else "No title card could be read. Enter the episode list from the case instead.")
+                               if n else "No title card could be read. Enter the "
+                               f"{'film' if film else 'episode'} list from the case instead.")
             if self.job is job:
                 self.fix_reads = {}
                 self.fill_table()
@@ -3564,7 +3658,7 @@ class MatchPage(QWidget):
         if not active and not self.win.busy("cards"):
             self.cards_timer.stop()
             self.win.cards_progress = None
-        if job is None or not cards or self.layout() == "movie":
+        if job is None or not cards:
             self.cards_box.hide()
             self.win.update_taskbar()
             return

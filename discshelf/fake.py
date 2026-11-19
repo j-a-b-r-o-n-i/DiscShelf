@@ -858,12 +858,50 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         with self.job_lock:
             return {ti: copy.copy(st) for ti, st in self._card_state.get(job.id, {}).items()}
 
+    def cards_possible(self, job: Job) -> bool:
+        d = self.cfg.destination(job.media_kind)
+        if not d or d.layout != "movie":
+            return True
+        return sum(1 for t in job.titles if t.selected and t.kind == "episode") >= 2
+
+    def cards_wanted(self, job: Job) -> bool:
+        return self.cfg.read_title_cards and self.cards_possible(job)
+
+    FILM_CARDS = ["It's the Great Pumpkin, Charlie Brown", "It's Magic, Charlie Brown"]
+
+    def _read_film_cards(self, job: Job) -> int:
+        """Pretends a disc of specials' cards name the Great Pumpkin and its bonus special, in disc order."""
+        from .naming import film_key
+        files = [f.title_index for f in job.files]
+        with self.job_lock:
+            self._card_state[job.id] = {ti: CardStatus() for ti in files}
+        n = 0
+        for k, ti in enumerate(files[:len(self.FILM_CARDS)]):
+            self._sleep(steps=2)
+            name = self.FILM_CARDS[k]
+            own = film_key(name) == film_key(job.show)
+            year = None if own else self.film_year(name)
+            with self.job_lock:
+                st = self._card_state[job.id][ti]
+                st.state, st.text, st.sure, st.seconds = "read", name.upper(), True, 0.1
+                job.matches = [Match(ti, "feature", confidence="close", source="card", film="" if own else name,
+                                     film_year=year) if m.title_index == ti else m for m in job.matches]
+            n += 1
+        with self.job_lock:
+            for st in self._card_state[job.id].values():
+                if st.state in ("waiting", "reading"):
+                    st.state = "none"
+        return n
+
     def read_cards(self, job: Job, progress=None, cancel=None, only=None) -> int:
         """Pretends each ripped title's card names the next episode of the show; the first is clear,
         the rest need a check. Reading only some titles (two that hold one episode) pretends their
         cards show the episode they're matched to, and changes no match."""
         if only is not None:
             return self._read_some(job, set(only), progress, cancel)
+        d = self.cfg.destination(job.media_kind)
+        if d and d.layout == "movie":
+            return self._read_film_cards(job)
         eps = self.episodes(job.show_id, None) if job.show_id else []
         files = [f.title_index for f in job.files]
         if not files or not eps:
@@ -954,7 +992,20 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
 
     def film_year(self, title: str) -> int | None:
         self._sleep(steps=2)
-        return {"you're not elected, charlie brown": 1972}.get(title.strip().casefold())
+        return {"you're not elected, charlie brown": 1972,
+                "it's the great pumpkin, charlie brown": 1966, "it's magic, charlie brown": 1981}.get(title.strip().casefold())
+
+    def match_films_from_list(self, job: Job, text: str) -> list[Match]:
+        from .match import match_films, parse_film_list
+        from .naming import film_key
+        by = {m.title_index: copy.deepcopy(m) for m in job.matches}
+        titles = [t for t in job.titles if t.selected and t.kind in ("feature", "episode")]
+        for ti, name, note in match_films(titles, parse_film_list(text), {}):
+            own = film_key(name) == film_key(job.show)
+            by[ti] = Match(ti, "feature", confidence="close", note=note, source="list",
+                           film="" if own else name, film_year=None if own else self.film_year(name))
+        job.matches = [by[k] for k in sorted(by)]
+        return job.matches
 
     def match_from_list(self, job: Job, show_id: int, text: str) -> list[Match]:
         names = parse_episode_list(text)

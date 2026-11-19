@@ -249,6 +249,11 @@ episode by the show folder, the season and the `S01E01` code, and ignore the res
   set to "Another film…" on the Match page gets that film's name and year, and its own
   folder. The year is looked up on TheDiscDB when it's left empty. The disc's extras go with
   its first film.
+  On a disc of TV specials, their title cards are read and compared with the films TheDiscDB
+  lists on releases that hold the disc's film; a reading counts when the title's running time
+  is within 30 seconds of TheDiscDB's for that film.
+  "Enter film list…" names them all at once from the case: each name goes to the title whose
+  running time fits the one TheDiscDB has for it on any release, else in disc order.
 - **Characters a Windows share can't store** are replaced by default: a colon becomes
   " - ", and `? * " < > |` are removed. Turned off, only `/` is removed.
 

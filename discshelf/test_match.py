@@ -11,8 +11,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from discshelf.match import (extra_name, feature_match, find_episode, match_list, match_titles,  # noqa: E402
-                             next_episode_number, parse_episode_list)
+from discshelf.match import (extra_name, feature_match, find_episode, match_films, match_list,  # noqa: E402
+                             match_titles, next_episode_number, parse_episode_list, parse_film_list)
 from discshelf.models import Episode, Title  # noqa: E402
 
 
@@ -98,6 +98,20 @@ def run():
     ms = feature_match([T(0, 25.3), T(2, 24.3)])
     check([(m.target, m.confidence) for m in ms] == [("feature", "check"), ("extra", "check")], f"specials: {ms}")
     check("Another film" in ms[1].note, f"specials note: {ms[1].note}")
+
+    # A film list off a holiday disc's case: labels go, and each name goes to the title its
+    # running time on TheDiscDB fits, whatever order the case lists them in.
+    check(parse_film_list("It's the Great Pumpkin, Charlie Brown\nBonus Episode: It's Magic, Charlie Brown\n"
+                          "Plus Featurette: We Need a Blockbuster\n\n") ==
+          ["It's the Great Pumpkin, Charlie Brown", "It's Magic, Charlie Brown", "We Need a Blockbuster"],
+          f"film list: {parse_film_list('Bonus Episode: X')}")
+    sp = [T(0, 1516 / 60), T(2, 1459 / 60)]
+    lengths = {"Pumpkin": [1518], "Magic": [1464, 1470]}
+    check(match_films(sp, ["Magic", "Pumpkin"], lengths) == [(0, "Pumpkin", ""), (2, "Magic", "")],
+          f"films by length: {match_films(sp, ['Magic', 'Pumpkin'], lengths)}")
+    check(match_films(sp, ["A", "B", "C"], {}) == [(0, "A", ""), (2, "B", "")], "films in disc order")
+    far = match_films(sp, ["Pumpkin", "Long"], {"Pumpkin": [1518], "Long": [3000]})
+    check(far[1][:2] == (2, "Long") and "TheDiscDB has" in far[1][2], f"a far-off length is flagged: {far}")
 
     # 11-minute cartoons against TVmaze's 15-minute slot fit.
     ms = match_titles([T(1, 11.7), T(2, 11.9), T(3, 11.8)], eps(15, 15, 15))

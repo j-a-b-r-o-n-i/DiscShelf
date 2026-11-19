@@ -481,6 +481,69 @@ def run():
     combo = win.match.table.cellWidget(1, 2).findChild(gui.NoWheelComboBox)
     check(combo.currentText() == "Film · You're Not Elected, Charlie Brown (1972)", f"film choice: {combo.currentText()}")
 
+    # The list from the case names the bonus special instead.
+    check(win.match.list_btn.isVisibleTo(win) and win.match.list_btn.isEnabled()
+          and win.match.list_btn.text() == "Enter film list…", f"film list button: {win.match.list_btn.text()}")
+
+    class FilmListDialog:
+        def __init__(self, _parent, _text, read_photo=None, film=False):
+            check(film and read_photo is None, "the film list dialog wasn't asked for films")
+            self.text = SimpleNamespace(toPlainText=lambda: "It's the Great Pumpkin, Charlie Brown\n"
+                                                            "Bonus Episode: It's Magic, Charlie Brown")
+
+        def exec(self):
+            return gui.QDialog.DialogCode.Accepted
+
+    real_list, gui.EpisodeListDialog = gui.EpisodeListDialog, FilmListDialog
+    try:
+        win.match.enter_list()
+        check(wait(lambda: not win.busy("suggest") and second().film == "It's Magic, Charlie Brown"),
+              f"the film list didn't name the bonus special: {hjob.matches}")
+    finally:
+        gui.EpisodeListDialog = real_list
+    check((second().film_year, hjob.matches[0].film) == (1981, ""), f"film list matches: {hjob.matches}")
+
+    # The same disc as it comes from the Rip page, sent to TV shows: no show has its name, but
+    # TheDiscDB has a film by it, so it goes to the films folder without an error.
+    errors = []
+    real_error, win.error = win.error, lambda *a, **_k: errors.append(a)
+    try:
+        tjob = Job(id="pumpkin-tv", disc_label="ITS_THE_GREAT_PUMPKIN", titles=[_copy_mod.copy(t) for t in sp],
+                   media_kind="tv", destination=ctl.cfg.destination("tv").path,
+                   show="It's the Great Pumpkin, Charlie Brown", stage="match")
+        win.match.open(tjob)
+        check(wait(lambda: win.match.layout() == "movie" and not win.busy("suggest") and tjob.matches),
+              f"the special didn't move to films: {tjob.destination} {errors}")
+        check((tjob.destination, tjob.year) == (movies, 1966), f"film folder and year: {tjob.destination} {tjob.year}")
+        check(bool(tjob.matches) and tjob.matches[0].target == "feature", f"the special isn't the film: {tjob.matches}")
+        check("as a film" in win.match.saved.text(), f"no note on the switch: {win.match.saved.text()!r}")
+        check(not errors, f"an error was shown: {errors}")
+        # A name that is neither a show nor a film still says so.
+        errors.clear()
+        njob = Job(id="nothing-tv", disc_label="NOTHING", titles=[_copy_mod.copy(t) for t in sp], media_kind="tv",
+                   destination=ctl.cfg.destination("tv").path, show="Nothing Like It", stage="match")
+        win.match.open(njob)
+        check(wait(lambda: bool(errors)), "no error for a name that is neither a show nor a film")
+        check(njob.destination == ctl.cfg.destination("tv").path, "a disc no one knows was moved to films")
+    finally:
+        win.error = real_error
+
+    # The disc of specials already ripped: its title cards are read as soon as it opens, and name both.
+    from discshelf.models import RippedFile as _RF
+    rjob = Job(id="pumpkin-ripped", disc_label="ITS_THE_GREAT_PUMPKIN", titles=[_copy_mod.copy(t) for t in sp],
+               media_kind="movie", destination=movies, show="It's the Great Pumpkin, Charlie Brown", year=1966,
+               stage="match", files=[_RF(title_index=t.index, path=f"/nonexistent/t{t.index}.mkv") for t in sp])
+    win.match.open(rjob)
+    named = lambda: [(m.title_index, m.target, m.film, m.film_year, m.source) for m in rjob.matches]  # noqa: E731
+    check(wait(lambda: named() == [(1, "feature", "", None, "card"),
+                                   (2, "feature", "It's Magic, Charlie Brown", 1981, "card")] and not win.busy("cards")),
+          f"the specials weren't named from their cards: {named()}")
+    app.processEvents()
+    win.match.refresh_cards()
+    check(win.match.cards_box.isVisibleTo(win) and not win.match.table.isColumnHidden(6),
+          "the film disc shows no title card progress")
+    check(win.match.cards_btn.isVisibleTo(win), "no Read title cards button on a disc of specials")
+
     for f in failures:
         print("FAIL:", f)
     print(f"gui: {'ok' if not failures else f'{len(failures)} failure(s)'}")
