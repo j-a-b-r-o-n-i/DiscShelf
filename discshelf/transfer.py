@@ -38,7 +38,8 @@ RSYNC_FLAGS = [
 
 CHUNK = 8 * 1024 * 1024
 
-_PROGRESS = re.compile(r"^\s*([\d,]+)\s+(\d+)%\s+([\d.]+)([kMGT]?B)/s\s+(\d+:\d\d:\d\d)")
+# rsync 3.5 puts a unit on the byte count ("66,748,416B"); earlier versions print the bare number.
+_PROGRESS = re.compile(r"^\s*([\d,]+)B?\s+(\d+)%\s+([\d.]+)([kMGT]?B)/s\s+(\d+:\d\d:\d\d)")
 _UNITS = {"B": 1, "kB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4}   # rsync's are binary
 
 

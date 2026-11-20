@@ -4892,7 +4892,9 @@ class CopyPage(QWidget):
                 pct = int(max(0.0, min(1.0, own)) * 100)
                 text, kind = (f"Copying · {pct}%" if running else f"Paused · {pct}%"), "warn"
             elif pstate == "waiting_match":
-                text, kind = "Needs a check", "warn"
+                # The state stays until the copy reaches the file, so a confirmed match only waits its turn.
+                m = next((x for x in self.job.matches if x.title_index == _idx), None)
+                text, kind = ("Waiting to copy", "plain") if m is not None and m.ready else ("Needs a check", "warn")
             elif pstate == "ripping":
                 text, kind = f"Ripping · {int(p.ripped_bytes / (p.total_bytes or 1) * 100)}%", "plain"
             elif pstate == "waiting":

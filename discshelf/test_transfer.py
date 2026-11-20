@@ -11,6 +11,8 @@ Run:  python3 discshelf/test_transfer.py    (also works under pytest)
 import datetime as dt
 import io
 import os
+import subprocess
+import re
 import shutil
 import sys
 import tempfile
@@ -66,9 +68,27 @@ def run():
     check(text == "1.2 GB of 4.0 GB · 100 MB/s · 0:30 left", f"GB progress: {text!r}")
     f, text = tr.parse_progress("     30,000,000 100%   19.93MB/s    0:00:01 (xfr#1, to-chk=0/1)", 30_000_000)
     check(f == 1.0 and "left" not in text, f"finished line: {text!r}")
+    # rsync 3.5 writes a unit after the byte count.
+    f, text = tr.parse_progress("     66,748,416B  22%   62.9MB/s    0:00:03  ", 300_000_000)
+    check(abs(f - 0.2225) < 0.001 and text == "66.7 MB of 300.0 MB · 66 MB/s · 0:03 left", f"rsync 3.5: {f} {text!r}")
+    f, _ = tr.parse_progress("    300,000,000B 100%   64.3MB/s    0:00:04 (xfr#1, to-chk=0/1)", 300_000_000)
+    check(f == 1.0, f"rsync 3.5 finished line: {f}")
     check(tr.parse_progress("sending incremental file list") is None, "non-progress line parsed")
     _, text = tr.parse_progress("  5,000,000,000  50%  110.00MB/s    1:15:30")
     check(text.endswith("1:15:30 left") and "10.0 GB" in text, f"no total / hours: {text!r}")
+
+    # Every progress line the rsync installed here prints can be read, so the copy's speed
+    # chart isn't left empty when rsync changes how it writes them (3.5 added a unit).
+    if shutil.which("rsync"):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "big.bin")
+            with open(src, "wb") as fh:
+                fh.write(os.urandom(8_000_000))
+            out = subprocess.run(["rsync", *tr.RSYNC_FLAGS, "--bwlimit=4m", src, os.path.join(tmp, "out.bin")],
+                                 capture_output=True, check=True).stdout.decode(errors="replace")
+            lines = [ln for ln in re.split(r"[\r\n]", out) if "%" in ln]
+            check(lines and all(tr.parse_progress(ln, 8_000_000) for ln in lines),
+                  f"this rsync's progress lines aren't read: {lines[:3]}")
 
     with tempfile.TemporaryDirectory() as tmp:
         src = os.path.join(tmp, "a.mkv")

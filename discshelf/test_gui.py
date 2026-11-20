@@ -553,6 +553,19 @@ def run():
           "the film disc shows no title card progress")
     check(win.match.cards_btn.isVisibleTo(win), "no Read title cards button on a disc of specials")
 
+    # The Copy page: a confirmed title waiting its turn says so, not "Needs a check".
+    from discshelf.models import TitleProgress
+    cp = win.pages["copy"]
+    cjob = Job(id="copy-wait", disc_label="X", show="A Charlie Brown Christmas", media_kind="movie", stage="copy",
+               matches=[Match(0, "feature", confidence="close", confirmed=True),
+                        Match(1, "feature", confidence="check", film="Other")])
+    cp.job = cjob
+    rows = [(0, "A/A.mkv", 100, TitleProgress(0, state="waiting_match"), None),
+            (1, "B/B.mkv", 100, TitleProgress(1, state="waiting_match"), None)]
+    cp.fill_files(rows, 0.0, True)
+    got = [c.text() for c in cp._rows]
+    check(got == ["Waiting to copy", "Needs a check"], f"copy page waiting rows: {got}")
+
     for f in failures:
         print("FAIL:", f)
     print(f"gui: {'ok' if not failures else f'{len(failures)} failure(s)'}")

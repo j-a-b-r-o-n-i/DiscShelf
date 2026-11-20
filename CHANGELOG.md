@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The copy's speed chart and progress work with rsync 3.5, which writes its byte counts with a
+  unit ("66,748,416B"). None of its progress lines were read, so the chart stayed at 0 MB/s
+  and the progress jumped from file to file. A test now checks every progress line the
+  installed rsync prints.
+- On the Copy page, a confirmed title waiting for its turn says "Waiting to copy" instead of
+  "Needs a check".
 - A disc can hold more than one film, such as a holiday disc with two TV specials. On the
   Match page of a disc going to films, "Another film…" names a title as a film of its own,
   and it gets its own folder in storage. Its year is looked up on TheDiscDB when it's left
