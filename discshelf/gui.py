@@ -3386,28 +3386,31 @@ class MatchPage(QWidget):
                            "Check the spelling, or try the show's original title. If it's a film or a TV "
                            "special, choose your films folder in Copy to instead.")
 
-        def found(year):
+        def found(hit):
             if self.job is not job:
                 return
-            if not year or films is None or self.layout() == "movie":
+            if not hit or films is None or self.layout() == "movie":
                 not_found()
                 return
+            title, year = hit
             job.destination, job.media_kind, job.library = films.path, films.kind, films.library
-            job.year = year
-            if naming.film_key(name) != naming.film_key(job.show):
-                job.show = name
+            job.show, job.year = title, year
             job.matches = []
+            self.film_name.blockSignals(True)
+            self.film_name.setText(title)
+            self.film_name.blockSignals(False)
             self.fill_dest()
             self.fill_fields()
             self.refresh_suggestions()
-            self.set_saved(f"TheDiscDB lists “{name}” ({year}) as a film, so this disc now goes to "
+            named = f"“{title}” ({year})" if year else f"“{title}”"
+            self.set_saved(f"TheDiscDB lists {named} as a film, so this disc now goes to "
                            f"{films.label}. Choose another folder in Copy to if that's wrong.")
 
         if not name or films is None:
             not_found()
             return
         # Its own key: this starts while the show search's task is still finishing.
-        self.win.run_task("film_check", lambda _p: self.win.ctl.film_year(name), ok=found,
+        self.win.run_task("film_check", lambda _p: self.win.ctl.find_film(name), ok=found,
                           title="Couldn't search for the show",
                           next_step="Check the internet connection, then choose Find show again.")
 

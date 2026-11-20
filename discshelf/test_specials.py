@@ -70,6 +70,12 @@ def test_specials():
             4: "It's the Great Pumpkin, Charlie Brown (1966)/Featurettes/Making Of.mkv",
         }, got
 
+        # A disc's label stands for the one film whose title has all its words.
+        assert pipeline._film_words("CHARLIE_BROWN_XMAS") == pipeline._film_words("A Charlie Brown Christmas")
+        assert ctl.find_film("ITS THE GREAT PUMPKIN") == ("It's the Great Pumpkin, Charlie Brown", 1966)
+        assert ctl.find_film("Charlie Brown") is None            # two films have those words
+        assert ctl.find_film("Peanuts") is None                  # a series, not a film
+
         # A year left empty stays out of the name; TheDiscDB fills it in by the film's title.
         assert ctl.film_year("You're not elected - Charlie Brown") == 1972
         assert ctl.film_year("Peanuts") is None              # a series, not a film

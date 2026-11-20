@@ -990,6 +990,14 @@ class FakeController(QueueViews, season.SeasonChecks, nasfix.NasFixes):
     def _save(self, job: Job) -> None:
         self.save_job(job)
 
+    def find_film(self, name: str):
+        """Pretends TheDiscDB knows the Peanuts holiday specials, by the words of a disc's name."""
+        from .pipeline import _film_words
+        films = {"It's the Great Pumpkin, Charlie Brown": 1966, "A Charlie Brown Christmas": 1965}
+        want = _film_words(name)
+        hits = [t for t in films if want and want <= _film_words(t)]
+        return (hits[0], films[hits[0]]) if len(hits) == 1 else None
+
     def film_year(self, title: str) -> int | None:
         self._sleep(steps=2)
         return {"you're not elected, charlie brown": 1972,

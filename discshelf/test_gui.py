@@ -518,6 +518,15 @@ def run():
         check(bool(tjob.matches) and tjob.matches[0].target == "feature", f"the special isn't the film: {tjob.matches}")
         check("as a film" in win.match.saved.text(), f"no note on the switch: {win.match.saved.text()!r}")
         check(not errors, f"an error was shown: {errors}")
+        # A disc labelled with a short form of the film's title finds the film too.
+        xjob = Job(id="xmas-tv", disc_label="CHARLIE_BROWN_XMAS", titles=[_copy_mod.copy(t) for t in sp],
+                   media_kind="tv", destination=ctl.cfg.destination("tv").path, show="Charlie Brown Xmas",
+                   stage="match")
+        win.match.open(xjob)
+        check(wait(lambda: win.match.layout() == "movie" and not win.busy("suggest") and xjob.matches),
+              f"the Xmas disc didn't move to films: {xjob.destination} {errors}")
+        check((xjob.show, xjob.year) == ("A Charlie Brown Christmas", 1965), f"Xmas film: {xjob.show} {xjob.year}")
+        check(not errors, f"an error was shown for the Xmas disc: {errors}")
         # A name that is neither a show nor a film still says so.
         errors.clear()
         njob = Job(id="nothing-tv", disc_label="NOTHING", titles=[_copy_mod.copy(t) for t in sp], media_kind="tv",

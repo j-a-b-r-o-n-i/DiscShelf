@@ -461,6 +461,15 @@ def _hours_since(iso: str) -> float | None:
 
 
 _film_key = naming.film_key
+_FILM_SPELLINGS = {"xmas": "christmas", "and": "", "a": "", "an": "", "the": ""}
+
+
+def _film_words(title: str) -> set[str]:
+    """A film title's words for comparing a disc's label with it: "A Charlie Brown Christmas"
+    and "CHARLIE_BROWN_XMAS" both give {"charlie", "brown", "christmas"}."""
+    t = re.sub(r"['’]", "", (title or "").casefold()).replace("&", " and ").replace("x-mas", "xmas")
+    words = (_FILM_SPELLINGS.get(w, w) for w in re.findall(r"[0-9a-z]+", t))
+    return {w for w in words if w}
 
 
 def _label_stem(label: str) -> str:
@@ -2034,6 +2043,39 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
                     job.year = year
                     self._save(job)
         return job.year
+
+    def find_film(self, name: str) -> tuple[str, int | None] | None:
+        """The one film on TheDiscDB a disc's name stands for, as (title, year), or None.
+
+        A disc's label is often a short form of the film's title ("CHARLIE_BROWN_XMAS" for "A
+        Charlie Brown Christmas"), so the words are compared, not the spelling: "Xmas" is
+        "Christmas", "a", "an" and "the" don't count, and the film's title may have more words
+        than the label ("ITS_THE_GREAT_PUMPKIN"), as long as only one film has them all.
+        TheDiscDB finds only titles with every word searched for, so when the whole name finds
+        no film, its longest words are searched for instead. Offline, None."""
+        want = _film_words(name)
+        if not want:
+            return None
+        queries = [" ".join(sorted(want, key=lambda w: (-len(w), w)))]
+        if len(want) > 2:
+            queries.append(" ".join(sorted(want, key=lambda w: (-len(w), w))[:2]))
+        for q in queries:
+            try:
+                nodes = self.discdb.search(q)
+            except discdb.DiscDbError:
+                return None
+            films: dict[str, set[int]] = {}
+            for n in nodes:
+                if (n.get("type") or "").lower() == "movie" and n.get("title"):
+                    films.setdefault(n["title"], set()).update(
+                        {int(n["year"])} if str(n.get("year") or "").isdigit() else set())
+            same = [t for t in films if _film_words(t) == want]
+            more = [t for t in films if want <= _film_words(t)]
+            pick = same if len(same) == 1 else more if len(more) == 1 and len(want) >= 2 else []
+            if pick:
+                years = films[pick[0]]
+                return pick[0], (next(iter(years)) if len(years) == 1 else None)
+        return None
 
     def film_year(self, title: str) -> int | None:
         """The year of the one film TheDiscDB has under this title (punctuation aside), or None

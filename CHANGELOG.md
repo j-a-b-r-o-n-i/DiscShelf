@@ -7,6 +7,11 @@
   and it gets its own folder in storage. Its year is looked up on TheDiscDB when it's left
   empty. Before, every film title on a disc took the disc's name, so the second special
   could only be saved as an extra.
+- A disc labelled with a short form of a film's title, such as "CHARLIE_BROWN_XMAS" for "A
+  Charlie Brown Christmas", finds the film on TheDiscDB. Words are compared rather than the
+  spelling: "Xmas" is "Christmas", "a", "an" and "the" don't count, and the film may have
+  more words than the label as long as only one film has them all. Before, such a disc
+  stopped at "No show found" with no titles listed to match.
 - A disc of TV specials going to films is named from its title cards, with no typing. Its
   titles' cards are read during the rip, or when its Match page first opens if it was ripped
   already, and compared with the films TheDiscDB lists on releases that hold the disc's film.
