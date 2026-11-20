@@ -7,6 +7,14 @@
   and it gets its own folder in storage. Its year is looked up on TheDiscDB when it's left
   empty. Before, every film title on a disc took the disc's name, so the second special
   could only be saved as an extra.
+- A disc label with a misspelt or cut-off word still finds its film: "CHARLIE_BROWN_CHRISTMS",
+  "ITS_THE_GREAT_PUMPKN", "THE_DARK_KNGHT" and "…_CHARLIE_BR" do. When the label's words don't
+  find a film as spelt, each word is compared with the words of the films found by searching
+  the rest of the label, allowing a letter or two of difference or a word cut short. A film
+  is taken only when the label fits it clearly better than any other, or the label is its
+  whole title and not the other's (The Dark Knight, not The Dark Knight Rises). Words that
+  several films share, such as "CHARLIE_BROWN", still find nothing rather than a guess.
+  "DISC_1", "D2", "BD" and "WS" in a label are ignored, and "PT1" reads as "Part 1".
 - A disc labelled with a short form of a film's title, such as "CHARLIE_BROWN_XMAS" for "A
   Charlie Brown Christmas", finds the film on TheDiscDB. Words are compared rather than the
   spelling: "Xmas" is "Christmas", "a", "an" and "the" don't count, and the film may have

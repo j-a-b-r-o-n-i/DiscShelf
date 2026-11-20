@@ -144,6 +144,64 @@ def test_specials():
         "It's the Great Pumpkin, Charlie Brown (1966)/It's the Great Pumpkin, Charlie Brown (1966).mkv"
 
 
+# A small TheDiscDB that searches the way the real one does: every word in the title, any case.
+FILMS = [("A Charlie Brown Christmas", 1965), ("Charlie Brown's Christmas Tales", 2002),
+         ("It's the Great Pumpkin, Charlie Brown", 1966), ("A Charlie Brown Thanksgiving", 1973),
+         ("The Dark Knight", 2008), ("The Dark Knight Rises", 2012), ("Dark Water", 2005),
+         ("Harry Potter and the Deathly Hallows: Part 1", 2010),
+         ("Harry Potter and the Deathly Hallows: Part 2", 2011), ("Interstellar", 2014)]
+
+
+def searching_db(searches):
+    def fetch(_url, body):
+        v = json.loads(body)["variables"]
+        words = [v[k].casefold() for k in sorted(v)]
+        searches.append(" ".join(words))
+        nodes = [{"title": t, "year": y, "type": "Movie", "releases": []} for t, y in FILMS
+                 if all(w in t.casefold() for w in words)]
+        return json.dumps({"data": {"mediaItems": {"nodes": nodes}}}).encode()
+    return discdb.TheDiscDb(fetch=fetch)
+
+
+def test_find_film():
+    w = pipeline._label_words
+    assert w("A_CHARLIE_BROWN_XMAS_DISC_1") == ["charlie", "brown", "christmas"]
+    assert w("HARRY_POTTER_DEATHLY_HALLOWS_PT1") == ["harry", "potter", "deathly", "hallows", "part", "1"]
+    assert w("INTERSTELLAR_BD") == ["interstellar"] and w("THE_DARK_KNIGHT_D2") == ["dark", "knight"]
+    score = pipeline._label_score
+    assert score(["charlie", "brown", "christmas"], "A Charlie Brown Christmas") == (1.0, 0)
+    assert score(["charlie", "brown", "christms"], "A Charlie Brown Christmas")[0] > 0.95    # misspelt
+    assert score(["great", "pumpkin", "charlie", "br"], "It's the Great Pumpkin, Charlie Brown")[0] > 0.9  # cut off
+    assert score(["dark", "knght"], "The Dark Knight Rises")[1] == 1                          # leaves "rises" out
+    assert score(["charlie", "brown", "easter"], "A Charlie Brown Christmas")[0] == 0         # a word fits nothing
+
+    with tempfile.TemporaryDirectory() as root:
+        cfg = Config(destinations=[Destination("movie", "Movies", root, "", "movie")], rip_dir=root)
+        searches = []
+        ctl = pipeline.Controller(cfg, JobStore(os.path.join(root, "jobs")), tvmaze=FakeTvMaze(),
+                                  discdb_client=searching_db(searches))
+        find = ctl.find_film
+        assert find("CHARLIE_BROWN_XMAS") == ("A Charlie Brown Christmas", 1965)
+        assert find("A_CHARLIE_BROWN_XMAS_DISC_1") == ("A Charlie Brown Christmas", 1965)
+        assert find("HARRY_POTTER_DEATHLY_HALLOWS_PT2") == ("Harry Potter and the Deathly Hallows: Part 2", 2011)
+        assert find("INTERSTELLAR_BD") == ("Interstellar", 2014)
+        # Misspelt or cut-off words: the fuzzy fallback.
+        assert find("CHARLIE_BROWN_CHRISTMS") == ("A Charlie Brown Christmas", 1965)
+        assert find("ITS_THE_GREAT_PUMPKN") == ("It's the Great Pumpkin, Charlie Brown", 1966)
+        assert find("ITS_THE_GREAT_PUMPKIN_CHARLIE_BR") == ("It's the Great Pumpkin, Charlie Brown", 1966)
+        assert find("CHARLIE_BROWN_THANKSG") == ("A Charlie Brown Thanksgiving", 1973)
+        assert find("THE_DARK_KNGHT") == ("The Dark Knight", 2008)
+        # Not one clear film: nothing, rather than a guess.
+        assert find("CHARLIE_BROWN") is None
+        assert find("CHARLIE_BR") is None                    # cut off where every special starts alike
+        assert find("INTERSTELAR") is None                   # one word is too little to guess from
+        assert find("SEVERANCE_S1_D2") is None
+        searches.clear()
+        assert find("CHARLIE_BROWN_EASTER_SPECIAL") is None
+        assert len(searches) <= 12, searches          # 2 whole-word, 6 leaving a word out, 4 with three letters
+
+
 if __name__ == "__main__":
     test_specials()
+    test_find_film()
     print("specials: ok")

@@ -15,6 +15,7 @@ import collections
 import contextlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy as _copy
+import difflib
 import dataclasses
 from dataclasses import dataclass, field
 import datetime as _dt
@@ -461,15 +462,72 @@ def _hours_since(iso: str) -> float | None:
 
 
 _film_key = naming.film_key
-_FILM_SPELLINGS = {"xmas": "christmas", "and": "", "a": "", "an": "", "the": ""}
+_FILM_SPELLINGS = {"xmas": "christmas", "pt": "part", "and": "", "a": "", "an": "", "the": ""}
+
+
+# What a disc label adds that isn't part of the film's title.
+_LABEL_NOISE = re.compile(r"^(?:disc|disk|bd|bluray|blu|ray|dvd|uhd|ws|fs|widescreen|fullscreen)$")
+
+
+def _film_word_list(title: str) -> list[str]:
+    t = re.sub(r"['’]", "", (title or "").casefold()).replace("&", " and ").replace("x-mas", "xmas")
+    # Letters and digits apart, so a label's "PT1" is "part 1" as the title spells it.
+    words = (_FILM_SPELLINGS.get(w, w) for w in re.findall(r"[a-z]+|[0-9]+", t))
+    return [w for w in words if w]
+
+
+def _label_words(label: str) -> list[str]:
+    """A disc label's words without what labels add to a title ("DISC_1", "D2", "BD", "WS")."""
+    out, words = [], _film_word_list(label)
+    for i, w in enumerate(words):
+        if _LABEL_NOISE.match(w) or (w.isdigit() and i and words[i - 1] in ("disc", "disk", "d")) or \
+                (w == "d" and i + 1 < len(words) and words[i + 1].isdigit()):
+            continue
+        out.append(w)
+    return out
 
 
 def _film_words(title: str) -> set[str]:
     """A film title's words for comparing a disc's label with it: "A Charlie Brown Christmas"
     and "CHARLIE_BROWN_XMAS" both give {"charlie", "brown", "christmas"}."""
-    t = re.sub(r"['’]", "", (title or "").casefold()).replace("&", " and ").replace("x-mas", "xmas")
-    words = (_FILM_SPELLINGS.get(w, w) for w in re.findall(r"[0-9a-z]+", t))
-    return {w for w in words if w}
+    return set(_film_word_list(title))
+
+
+FUZZY_WORD = 0.8        # how alike a misspelt label word and a title word must be (difflib ratio)
+FUZZY_MARGIN = 0.05     # how much better the label must fit the best film than the next
+
+
+def _label_score(label: list[str], title: str) -> tuple[float, int]:
+    """How well a disc label's words fit a film's title, 0 to 1 (0 when any label word fits no
+    word of the title), and how many of the title's words the label leaves out. A word fits a title word that is the same (1), that it begins, as a
+    label cut short does (0.9; the label's last word may be as short as two letters, others
+    need four), or that is spelt within a letter or two of it (its similarity, at least
+    FUZZY_WORD, for words of four letters or more)."""
+    words = _film_word_list(title)
+    if not label or not words:
+        return 0.0, len(words)
+    total, used = 0.0, set()
+    for i, lw in enumerate(label):
+        best, at = 0.0, None
+        for j, tw in enumerate(words):
+            if j in used:
+                continue
+            if lw == tw:
+                s = 1.0
+            elif tw.startswith(lw) and len(lw) >= (2 if i == len(label) - 1 else 4):
+                s = 0.9
+            elif len(lw) >= 4 and len(tw) >= 4:
+                s = difflib.SequenceMatcher(None, lw, tw).ratio()
+                s = s if s >= FUZZY_WORD else 0.0
+            else:
+                s = 0.0
+            if s > best:
+                best, at = s, j
+        if at is None:
+            return 0.0, len(words)
+        used.add(at)
+        total += best
+    return total / len(label), len(words) - len(used)
 
 
 def _label_stem(label: str) -> str:
@@ -2053,7 +2111,7 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
         than the label ("ITS_THE_GREAT_PUMPKIN"), as long as only one film has them all.
         TheDiscDB finds only titles with every word searched for, so when the whole name finds
         no film, its longest words are searched for instead. Offline, None."""
-        want = _film_words(name)
+        want = set(_label_words(name))
         if not want:
             return None
         queries = [" ".join(sorted(want, key=lambda w: (-len(w), w)))]
@@ -2075,7 +2133,63 @@ class Controller(QueueViews, season.SeasonChecks, nasfix.NasFixes):
             if pick:
                 years = films[pick[0]]
                 return pick[0], (next(iter(years)) if len(years) == 1 else None)
-        return None
+        return self._fuzzy_film(name)
+
+    def _fuzzy_film(self, name: str) -> tuple[str, int | None] | None:
+        """find_film's last try, for a label with a misspelt or cut-off word ("CHRISTMS",
+        "…_CHARLIE_BR"): each of its longer words is searched for on its own, as a misspelt word
+        finds nothing, and the films found are scored with _label_score. The best is taken only
+        when every word of the label fits it and it scores FUZZY_MARGIN above the next."""
+        label = _label_words(name)
+        if len(label) < 2:
+            return None
+        # A search finds only titles with all its words, and at most 50, so it leaves out one
+        # word at a time (the misspelt one among them), longest words first, then single words.
+        long = sorted({w for w in label if len(w) >= 3}, key=lambda w: (-len(w), w))
+        queries = [" ".join(w for w in long if w != skip) for skip in long] if len(long) >= 3 else []
+        queries += [w for w in long if len(w) >= 4]
+        films: dict[str, set[int]] = {}
+        found_none: set[str] = set()        # searches that found nothing: a misspelt word among them
+
+        def gather(qs) -> bool:
+            for q in list(dict.fromkeys(q for q in qs if q)):
+                try:
+                    nodes = self.discdb.search(q)
+                except discdb.DiscDbError:
+                    return False
+                if not nodes:
+                    found_none.add(q)
+                for n in nodes:
+                    if (n.get("type") or "").lower() == "movie" and n.get("title"):
+                        films.setdefault(n["title"], set()).update(
+                            {int(n["year"])} if str(n.get("year") or "").isdigit() else set())
+            return True
+
+        if not gather(queries[:6]):
+            return None
+        wrong = next((w for w in long if w in found_none), None)
+        if wrong and not any(_label_score(label, t)[0] > 0 for t in films):
+            # A common word alone finds 50 titles that may leave the film out. Three letters of
+            # the word that found nothing, the misspelt one, narrow the search: "dark" and "ght"
+            # find "The Dark Knight" for "THE_DARK_KNGHT".
+            rest = [x for x in long if x != wrong]
+            grams = list(dict.fromkeys(wrong[i:i + 3] for i in range(len(wrong) - 2)))
+            if rest and not gather(" ".join(rest + [g]) for g in grams[:4]):
+                return None
+        scored = sorted(((*_label_score(label, t), t) for t in films), key=lambda x: (-x[0], x[1], x[2]))
+        scored = [x for x in scored if x[0] > 0]
+        if not scored:
+            return None
+        fit, left_out, title = scored[0]
+        if len(scored) > 1:
+            fit2, left_out2, _ = scored[1]
+            # Fitting clearly better decides. Fitting as well decides only when the label is
+            # this film's whole title and not the other's ("THE_DARK_KNGHT": The Dark Knight,
+            # not The Dark Knight Rises). Words several films share ("CHARLIE_BROWN") don't.
+            if fit - fit2 < FUZZY_MARGIN and not (left_out == 0 and left_out2 > 0):
+                return None
+        years = films[title]
+        return title, (next(iter(years)) if len(years) == 1 else None)
 
     def film_year(self, title: str) -> int | None:
         """The year of the one film TheDiscDB has under this title (punctuation aside), or None
